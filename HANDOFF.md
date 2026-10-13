@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.4.1 · stdlib Python only · last full test pass 2026-10-13
+App version 0.4.2 · stdlib Python only · last full test pass 2026-10-13
 
 ---
 
@@ -37,7 +37,8 @@ node test_render_dom.js                  # offline (needs `npm install` once —
                                                     # (.venv-pdf: python3 -m venv .venv-pdf && .venv-pdf/bin/pip install pypdfium2 pypdf)
 python3 verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports, PDF rendered
 python3 test_ui_contract.py [URL]        # live, but free when the files are already cached
-WANT=4 python3 live_pipeline_check.py [URL]   # live and costs 1 call per fresh file
+WANT=4 python3 live_pipeline_check.py [URL]   # live and costs 1 call per fresh file (+1 pre-flight probe, cached 10 min)
+python3 verify_live_two.py [URL]         # live: 1 cached + 1 fresh photo end to end, all four reports (+1 probe)
 python3 probe_latency_now.py             # live and costs 4 calls (2 text-only, 2 image)
 python3 analyze_question_spread.py       # offline: spread of every question in the cache (free)
 python3 summarize_wording_experiment.py  # offline: table from research/wording_experiment.jsonl
@@ -266,6 +267,7 @@ concurrency; you will only burn quota.
 | The list flickers / thumbnails reload | someone reintroduced `innerHTML` on `#items` (invariant 3) |
 | A row says "downloading" forever | the prefetch thread's status handling (invariant 2) |
 | 429s | budget: stop, wait for the top of the hour, or run from Toolforge; check the UI budget line |
+| Run stops at once, rows say "endpoint pre-flight failed" | the text-only probe failed — the endpoint is down or erroring; run `probe_latency_now.py` to confirm before touching the app |
 | Scores look wrong after a schema edit | the schema hash forces fresh calls; old cached values belong to the old wording |
 | A run never finishes, stuck at n-1 of n | look for `Exception in thread` in the server log — a dead producer thread blocks the pipeline; this is not necessarily endpoint latency (see §4) |
 | Numbers present in the job object but missing on the wire | check the field is set *before* the payload is built; per-photo values are refreshed by `_refresh_derived()` on every settle |
@@ -352,7 +354,7 @@ effectively tied. Rewording moves the pile-up from the middle to the ceiling.
 worse than today's question, or the platform swaps the model.
 
 **Caveats, stated in the write-up:** n=4 images (3 portraits, two from the same event), single-question
-records rather than the app's joint five-question schema, no human labels anywhere, and the whole run
+records rather than the app's joint six-question schema, no human labels anywhere, and the whole run
 happened while the endpoint was at ~57 s/call. The composite's pose weights are hand-chosen, not
 fitted. One genuine open question fell out: the composite and the `choice` variant both rank Jenni
 above Irina; every other wording does the opposite, and the difference is one dimension

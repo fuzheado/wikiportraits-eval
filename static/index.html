@@ -43,10 +43,9 @@
   .item{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px;
         display:flex;gap:12px;align-items:flex-start}
   .item .col{flex:1;min-width:0}
-  .item .thumb{flex:0 0 96px;width:96px;height:96px;object-fit:cover;border-radius:8px;
+  .item .thumb{flex:0 0 96px;width:96px;height:auto;object-fit:contain;border-radius:8px;
                border:1px solid var(--line);background:#eef2f7;display:block}
-  .item .thumb.none{display:flex;align-items:center;justify-content:center;text-align:center;
-                    font-size:11px;color:var(--muted);padding:6px}
+  .item .thumb.none{flex:0 0 96px;width:96px;height:96px}
   .item h3{margin:0 0 4px;font-size:14px;font-weight:600}
   .item .meta{font-size:12px;color:var(--muted);margin-bottom:6px;word-break:break-all}
   .q{display:grid;grid-template-columns:150px 1fr 62px;gap:8px;align-items:center;font-size:12.5px;
@@ -68,6 +67,13 @@
   .warn{color:var(--amber);font-size:13px}
   .ok{color:var(--green);font-weight:600}
   .clock{font-variant-numeric:tabular-nums}
+  .cbar{margin:7px 0}
+  .cbar .crow{display:flex;gap:10px;justify-content:space-between;align-items:baseline;
+              font-size:12.5px;margin-bottom:2px}
+  .cbar .clab{word-break:break-all;min-width:0}
+  .cbar .track{background:var(--bar);height:14px;border-radius:6px;overflow:hidden}
+  .cbar .fill{height:100%;background:var(--blue)}
+  .cbar .csub{font-size:11.5px;color:var(--muted);margin-top:1px}
   .hidden{display:none}
   .rank{color:var(--muted);font-weight:700;margin-right:7px}
   #spread .sp{margin-top:2px}
@@ -159,8 +165,10 @@ https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</textarea>
     <div class="row"><span id="counts" class="meter">0 / 0</span><span class="grow"></span>
       <span id="timing" class="meter"></span></div>
     <div id="latency" class="meter" style="margin-top:6px"></div>
+    <div id="probe" class="meter" style="margin-top:6px"></div>
     <div id="spread" class="meter" style="margin-top:6px"></div>
     <div id="stats" class="grid" style="margin-top:14px"></div>
+    <div id="chart" style="margin-top:14px"></div>
   </div>
 
   <div class="card">
@@ -222,7 +230,7 @@ function renderBody(it) {
       ${comp != null ? `<div class="q"><div><b>composite → ${fmt(comp)}</b> <span class="meter">(our arithmetic: min(face, eyes) × pose weight — not a model probability)</span></div>
         <div class="track"><div class="fill" style="width:${(comp * 100).toFixed(1)}%"></div></div>
         <div class="val">${fmt(comp)}</div></div>` : ""}
-      ${pub.choice ? bar(`publish → <b>${esc(pub.choice)}</b> (model's own choice)`, pubP) : ""}
+      ${pub.choice ? bar(`publish → ${pub.choice} (model's own choice)`, pubP) : ""}
       ${bar("infobox ready (P true)", a.infobox_ready.noul)}
       ${bar("face visible (P true)", a.face_visible.noul)}
       ${bar("eyes → camera (P true)", a.eyes_to_camera.noul)}
@@ -314,6 +322,31 @@ function renderItem(it, i, rank) {
   return key;
 }
 
+// end-of-run chart: one horizontal bar per photo, scaled to the best composite in the run,
+// so the field can be read at a glance. Composite is our arithmetic, not a model probability.
+function renderChart(job) {
+  const el = $("chart");
+  if (!el) return;
+  if (job.status !== "done" && job.status !== "error") { el.innerHTML = ""; return; }
+  const done = (job.items || []).filter(i => i.status === "done" && i.composite != null)
+    .sort((a, b) => b.composite - a.composite);
+  if (done.length < 2) { el.innerHTML = ""; return; }
+  const max = done[0].composite;
+  el.innerHTML = `<b class="big">composite by photo</b> <span class="meter">our arithmetic
+    (min(face, eyes) × pose weight) — not a model probability · bars scaled to the best photo
+    (${fmt(max)})</span>`
+    + done.map((it, ix) => {
+        const t = it.title || it.raw || "";
+        const short = t.length > 64 ? t.slice(0, 61) + "…" : t;
+        const pct = (it.composite / max * 100).toFixed(1);
+        const pubP = pubProbs((it.result || {}).answers?.publish_ready || {});
+        return `<div class="cbar"><div class="crow"><span class="clab"><span class="rank">#${ix + 1}</span>
+            ${esc(short)}</span><span class="val">${fmt(it.composite)}</span></div>
+          <div class="track"><div class="fill" style="width:${pct}%"></div></div>
+          <div class="csub">P(publish) ${fmt(pubP)} · P(infobox) ${fmt(it.result?.answers?.infobox_ready?.noul)}${it.from_cache ? " · cached" : ""}</div></div>`;
+      }).join("");
+}
+
 // the metric the run reports: separation among candidates, not standard deviation
 function renderSpread(sp) {
   const el = $("spread");
@@ -393,6 +426,13 @@ function renderJob(job) {
     if (!seen.has(key)) { row.el.remove(); rows.delete(key); }
   }
   renderSpread(job.spread);
+  renderChart(job);
+  const pr = job.probe;
+  $("probe").innerHTML = !pr ? ""
+    : pr.ok ? `<span class="ok">endpoint check ✓</span> — answered a text-only pre-flight in
+        ${fmt(pr.wall_s, 2)}s${pr.cached ? " (recent result reused)" : ""}`
+            : `<span class="warn">endpoint check FAILED — ${esc(pr.error || ("HTTP " + pr.http))}
+        in ${fmt(pr.wall_s, 2)}s; the run stopped before spending the queue</span>`;
   const logTxt = (job.log || []).join("\n");
   if ($("log").textContent !== logTxt) $("log").textContent = logTxt;
   if (job.budget) {

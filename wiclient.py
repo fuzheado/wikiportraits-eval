@@ -457,6 +457,30 @@ def image_size(data: bytes):
 
 
 # -------------------------------------------------------------- LiftWing call
+def probe_endpoint(timeout: int = 45) -> dict:
+    """One tiny text-only call: is the endpoint answering at all, before a run spends the queue?
+
+    Deliberately minimal — no image, a single throwaway yes/no question — so it costs a fraction of
+    a real decision call and answers the 'EngineCore 500 / service-side hang' failure modes in
+    seconds. Counts against the budget like any other call.
+    """
+    body = {"model": "llm-clef-flash", "state": "",
+            "questions": {"q": {"type": "noul", "text": "Is this a photograph of a person?"}}}
+    req = urllib.request.Request(LIFTWING, data=json.dumps(body).encode(), method="POST")
+    req.add_header("User-Agent", UA)
+    req.add_header("Content-Type", "application/json")
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            code, detail = r.status, ""
+    except urllib.error.HTTPError as e:
+        code, detail = e.code, e.read().decode()[:120]
+    except Exception as exc:
+        return {"ok": False, "wall_s": round(time.time() - t0, 2), "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": code == 200, "http": code, "wall_s": round(time.time() - t0, 2),
+            "error": None if code == 200 else detail}
+
+
 def score_image(img_b64: str, budget: Budget, timeout: int = 180) -> dict:
     """One decision call. Honours the hourly budget and Retry-After."""
     wait = budget.wait_seconds()

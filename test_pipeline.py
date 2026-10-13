@@ -85,6 +85,9 @@ wiclient.resolve = fake_resolve
 wiclient.fetch_bytes = fake_fetch
 wiclient.image_size = fake_size
 wiclient.score_image = fake_score
+# pre-seed the endpoint pre-flight so run_job makes no network call in this offline test
+import time as _time
+core._PROBE.update(t=_time.time(), result={"ok": True, "http": 200, "wall_s": 0.05, "error": None})
 core.wiclient = wiclient
 
 job = core.new_job("\n".join(f"File:Test {n}.jpg" for n in range(1, N + 1)))

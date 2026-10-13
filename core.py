@@ -13,6 +13,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(HERE, "cache"))
 MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
+EVAL_MAX = int(os.environ.get("EVAL_MAX", "25"))       # per-call cap for POST /api/eval
+PROBE_TTL = float(os.environ.get("PROBE_TTL", "600"))  # reuse a pre-flight answer for 10 min
 PREFETCH = max(1, int(os.environ.get("PREFETCH", "2")))   # images buffered ahead of the model call
 START = time.time()
 
@@ -234,6 +236,19 @@ def latency_summary(job: dict) -> dict:
 
 
 # ------------------------------------------------------------------- worker
+def _endpoint_probe() -> dict:
+    """Pre-flight the endpoint once per PROBE_TTL and reuse the verdict for later runs."""
+    if time.time() - _PROBE.get("t", 0) < PROBE_TTL and _PROBE.get("result"):
+        return dict(_PROBE["result"]) | {"cached": True}
+    res = wiclient.probe_endpoint()
+    BUDGET.note_call()
+    _PROBE.update(t=time.time(), result=res)
+    return dict(res)
+
+
+_PROBE: dict = {"t": 0.0, "result": None}
+
+
 def _refresh_derived(job):
     """Recompute the per-photo numbers and the run-level spread from whatever has settled.
 
@@ -313,6 +328,28 @@ def run_job(job):
 
     fetch_s = score_s = 0.0
     if pending:
+        # pre-flight: verify the endpoint answers a tiny text-only question before spending the
+        # queue. On failure the run stops here — n cheap-looking "error" rows after an outage are
+        # worse than one honest early stop (and 429s/EngineCore 500s cost nothing further).
+        probe = _endpoint_probe()
+        job["probe"] = probe
+        if not probe.get("ok"):
+            why = probe.get("error") or (f"HTTP {probe.get('http')}" if probe.get("http") else "no answer")
+            log(job, f"endpoint pre-flight FAILED ({why}, {probe.get('wall_s')}s) — stopping before "
+                     f"spending the queue; retry when the endpoint answers again")
+            for item in pending:
+                item.update({"status": "error",
+                             "error": "endpoint pre-flight failed — the model endpoint did not "
+                                      "answer, so nothing was scored; thumbnails and resolution "
+                                      "are kept"})
+            _refresh_derived(job)
+            job["stats"] = reports.stats(job["items"])
+            job["latency"] = latency_summary(job)
+            job["elapsed_s"] = round(time.time() - t0, 2)
+            job["status"] = "error"
+            log(job, f"finished in {job['elapsed_s']}s")
+            return
+        log(job, f"endpoint check ok — answered a text-only pre-flight in {probe.get('wall_s')}s")
         log(job, f"pipeline: downloading ahead ({PREFETCH} buffered) while the model answers")
         q: queue.Queue = queue.Queue(maxsize=PREFETCH)
         stop = threading.Event()
@@ -383,7 +420,7 @@ def run_job(job):
 
 
 # ------------------------------------------------------------------- about
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 MODEL_CARD = "https://huggingface.co/Cloudflare/clef-flash"
 WIKITECH_PAGE = "https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models"
 
@@ -547,6 +584,22 @@ def about_payload() -> dict:
                   "LiftWing (<code>api.wikimedia.org</code>). Results are cached locally under "
                   "<code>cache/</code>; job state lives in memory and disappears when the server "
                   "restarts. No accounts, no analytics, no third parties.</li></ul>")},
+        {"title": "HTTP API",
+         "html": ("<p>Everything the page does is also available programmatically. Client "
+                  "timeout should be generous — a call blocks until the whole run finishes "
+                  "(~1 call per photo, spaced " + str(SPACING) + "&nbsp;s apart).</p>"
+                  "<pre>GET  /api/health               → liveness\n"
+                  "GET  /api/about                → this panel (live prompt, legends, limits)\n"
+                  "GET  /api/config               → budget, cache size, schema hash\n"
+                  "POST /api/parse               {\"text\": \"Foo.jpg\\nBar.jpg\"} → resolved metadata\n"
+                  "POST /api/run                 {\"text\": …} → job_id; poll GET /api/job/&lt;id&gt;\n"
+                  "POST /api/eval                {\"files\": [\"File:A.jpg\", …]} → blocked, final\n"
+                  "                                results (≤ " + str(EVAL_MAX) + " files per call)\n"
+                  "GET  /api/job/&lt;id&gt;/report.{md,json,csv,pdf}</pre>"
+                  "<p><code>/api/eval</code> returns ranked <code>results[]</code> (composite, "
+                  "P(publish), pose, quality, per-question probabilities, licence, cache/wall "
+                  "info), the run's <code>spread</code> and <code>stats</code>, and links to the "
+                  "four reports. It honours the same cache, budget and 429 rules as the UI.</p>")},
         {"title": "Provenance",
          "html": (f"<ul><li>App version {esc(APP_VERSION)} · model "
                   f"<code>llm-clef-flash</code> (clef-flash 9B, Apache-2.0, served by WMF on "
@@ -621,6 +674,32 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
 
         if method == "POST":
             data = json.loads(body.decode() or "{}") if body else {}
+            if path == "/api/eval":
+                files = data.get("files")
+                if isinstance(files, str):
+                    files = [files]
+                files = [str(f).strip() for f in (files or []) if str(f).strip()]
+                if not files:
+                    return js({"error": 'POST JSON {"files": ["File:A.jpg", ...]} — up to '
+                                        f"{EVAL_MAX} per call (raise the EVAL_MAX env var if you "
+                                        "need more)"}, 400)
+                if len(files) > EVAL_MAX:
+                    return js({"error": f"at most {EVAL_MAX} files per /api/eval call "
+                                        f"(got {len(files)})"}, 413)
+                active = [j for j in JOBS.values() if j["status"] in ("queued", "running")]
+                if len(active) >= MAX_PARALLEL_JOBS:
+                    return js({"error": "another run is already in progress"}, 409)
+                job = new_job("\n".join(files))
+                if not job["items"]:
+                    return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
+                run_job(job)          # synchronous: /api/eval blocks until the whole run finishes
+                return js({"job_id": job["id"], "status": job["status"],
+                           "elapsed_s": job.get("elapsed_s"),
+                           "probe": job.get("probe"), "spread": job.get("spread"),
+                           "stats": job.get("stats"), "latency": latency_summary(job),
+                           "results": [_eval_row(i) for i in job["items"]],
+                           "reports": {f"report.{f}": f"/api/job/{job['id']}/report.{f}"
+                                       for f in ("md", "json", "csv", "pdf")}})
             if path == "/api/parse":
                 parsed = wiclient.parse_entries(data.get("text", ""))
                 titles = [{"title": i["title"], "wiki": i.get("wiki")} for i in parsed["items"]]
@@ -651,6 +730,28 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
     except Exception:
         traceback.print_exc()
         return 500, "application/json", json.dumps({"error": "server error"}).encode(), {}
+
+
+def _eval_row(item: dict) -> dict:
+    """One compact, API-friendly row for POST /api/eval (the full job payload stays available)."""
+    a = (item.get("result") or {}).get("answers") or {}
+    pose = a.get("pose") or {}
+    title = item.get("title")
+    return {"title": title, "pageid": item.get("pageid"), "wiki": item.get("wiki"),
+            "status": item.get("status"), "error": item.get("error"),
+            "from_cache": item.get("from_cache"),
+            "commons_url": ("https://commons.wikimedia.org/wiki/"
+                            + title.replace(" ", "_")) if title else None,
+            "license": item.get("license"),
+            "composite": item.get("composite"), "publish_p": item.get("publish_p"),
+            "infobox_ready": (a.get("infobox_ready") or {}).get("noul"),
+            "face_visible": (a.get("face_visible") or {}).get("noul"),
+            "eyes_to_camera": (a.get("eyes_to_camera") or {}).get("noul"),
+            "pose": {"choice": pose.get("choice"),
+                     "probability": (pose.get("probabilities") or {}).get(pose.get("choice"))},
+            "quality_0_4": (a.get("quality") or {}).get("score"),
+            "input_tokens": ((item.get("result") or {}).get("usage") or {}).get("input_tokens"),
+            "wall_s": (item.get("result") or {}).get("wall_s")}
 
 
 def _report(job, fmt):

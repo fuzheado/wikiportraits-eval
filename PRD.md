@@ -10,7 +10,7 @@
 A single-page web app that turns a pasted list of Wikimedia Commons photographs into a ranked,
 downloadable assessment of how well each photo works as a Wikipedia biography portrait. Each photo
 is sent **once** to `llm-clef-flash` — Cloudflare's decision model, served by the Wikimedia
-Foundation on LiftWing — with a fixed five-question schema, and the app reports the model's
+Foundation on LiftWing — with a fixed six-question schema, and the app reports the model's
 probabilities per photo plus aggregate statistics.
 
 One sentence: *paste photo references, get a ranked, auditable triage table, and download it.*

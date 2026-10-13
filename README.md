@@ -52,9 +52,15 @@ with the model's exact questions shown to you.
 1. **Paste your list** — one photo per line, in almost any form (see below).
 2. **Check inputs** — the tool resolves each line against Commons and shows you what it understood
    (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged.
-3. **Score them** — one request per photo, cached, with live progress. A photo already scored shows
-   instantly and costs nothing.
-4. **Download** the Markdown/JSON/CSV/PDF report, or read the cards on screen.
+3. **Score them** — the app first sends a **tiny text-only pre-flight question** to the endpoint
+   and shows its verdict in the progress card ("endpoint check ✓ …"). If the endpoint does not
+   answer, the run stops there instead of burning the queue on failing calls. One request per
+   photo after that, cached, with live progress. A photo already scored shows instantly and costs
+   nothing.
+4. **Read the field at a glance** — when the run finishes, a horizontal bar chart under the stats
+   shows every photo's composite, scaled to the best photo, with P(publish) and P(infobox) under
+   each bar.
+5. **Download** the Markdown/JSON/CSV/PDF report, or read the cards on screen.
 
 ### Forms you can paste
 
@@ -151,7 +157,9 @@ PORT=8080 python3 app.py       # honour a supplied port (Toolforge does this)
 ```
 
 Optional settings: `THUMB_WIDTH` (640), `SPACING` (0.9 s between calls), `HOURLY_BUDGET` (100),
-`MAX_PARALLEL_JOBS` (2), `CACHE_DIR` (`./cache`), `BASELINE_WARM_S` (0.54),
+`MAX_PARALLEL_JOBS` (2), `EVAL_MAX` (25, the per-call cap for `POST /api/eval`),
+`PROBE_TTL` (600 s, how long a pre-flight verdict is reused), `CACHE_DIR` (`./cache`),
+`BASELINE_WARM_S` (0.54),
 `WIKIMEDIA_USER_AGENT` (please set your own contact URL if you deploy this).
 
 ### Deploying to Toolforge
@@ -178,6 +186,21 @@ The model route allows roughly **100 calls per hour per anonymous client**, shar
 the app scores one photo at a time with a small gap between calls, stops when the server says 429,
 and caches every answer by `(wiki, pageid, sha1, schema, width)` — re-scoring a photo you have
 already scored costs nothing, and re-uploading a file invalidates its cache entry automatically.
+
+## HTTP API
+
+Everything the page does is also available programmatically (also documented in the **About**
+panel, generated live from the code):
+
+```bash
+POST /api/parse  '{"text": "Foo.jpg\nBar.jpg"}'              # resolve + metadata, no scoring
+POST /api/eval   '{"files": ["File:A.jpg", "File:B.jpg"]}'   # blocked; final ranked results (≤ EVAL_MAX)
+POST /api/run    '{"text": …}'                               # async; poll GET /api/job/<id>
+GET  /api/job/<id>/report.{md,json,csv,pdf}                   # reports for a finished job
+```
+
+`/api/eval` returns `results[]` (composite, P(publish), per-question probabilities, pose, quality,
+licence, Commons link), the run's `spread` and `stats`, and links to the four reports.
 
 ## Reports
 

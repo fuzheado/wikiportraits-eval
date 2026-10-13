@@ -151,7 +151,7 @@ def _method_block(model_note=""):
         "Inputs: Commons thumbnails at the standard step nearest above 640 px (the server downscales "
         "to 640 px wide before the encoder, so larger sends add no information).",
         "Note: probabilities depend on the question set — the head scores every question jointly, so "
-        "only compare runs that used this identical five-question schema." + model_note,
+        f"only compare runs that used this identical {len(wiclient.QUESTIONS)}-question schema." + model_note,
     ]
 
 
