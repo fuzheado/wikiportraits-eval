@@ -465,6 +465,24 @@ def about_payload() -> dict:
            "beside it.</p>"
            "<p>Every answer comes from one request per photo. There is no text generation, no "
            "second pass, no human review, and nothing is written to any wiki.</p>")},
+        {"title": "Accepted input formats",
+         "html": ("<p>One image per line; these forms all work and can be mixed:</p>"
+                  "<p><code>Foo.jpg</code> · <code>File:Foo.jpg</code> · "
+                  "<code>commons.wikimedia.org/wiki/File:Foo.jpg</code> · "
+                  "<code>https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</code> · "
+                  "<code>…/thumb/0/06/Foo.jpg/640px-Foo.jpg</code> · "
+                  "<code>Special:FilePath/Foo.jpg</code> · "
+                  "<code>…/w/index.php?title=File:Foo.jpg</code> · "
+                  "<code>[[File:Foo.jpg|thumb|caption]]</code></p>"
+                  "<p>Case, underscores, <code>%20</code> encoding, bullets/numbering and quotes are "
+                  "all tolerated; duplicates are merged. A comma or semicolon only separates two "
+                  "entries when another entry clearly follows it (a <code>File:</code> prefix, a URL, "
+                  "<code>[[</code>), so file names that contain a comma — "
+                  "<code>…(In die Sonne schauen, Cannes 2025).jpg</code> — stay intact, while "
+                  "<code>Foo.jpg, Bar.jpg</code> still splits. Files hosted on other Wikimedia wikis "
+                  "work too and are labelled with their wiki. Non-photo media (SVG, PDF, video) "
+                  "resolve as well, because Commons renders a raster preview. Category listings are "
+                  "<em>not</em> supported yet — paste the file names instead.</p>")},
         {"title": "How a run works, step by step",
          "html": ("<ol>"
            "<li><b>Parse and normalise</b> each pasted line to a <code>File:</code> title. A line "

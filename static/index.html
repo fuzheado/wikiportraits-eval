@@ -68,12 +68,21 @@
   .ok{color:var(--green);font-weight:600}
   .clock{font-variant-numeric:tabular-nums}
   .cbar{margin:7px 0}
-  .cbar .crow{display:flex;gap:10px;justify-content:space-between;align-items:baseline;
-              font-size:12.5px;margin-bottom:2px}
-  .cbar .clab{word-break:break-all;min-width:0}
-  .cbar .track{background:var(--bar);height:14px;border-radius:6px;overflow:hidden}
-  .cbar .fill{height:100%;background:var(--blue)}
-  .cbar .csub{font-size:11.5px;color:var(--muted);margin-top:1px}
+  .chartbox{position:relative;margin-top:10px;border-bottom:1px solid var(--line)}
+  .chartbox .caxis{position:absolute;left:0;right:0;bottom:20px;height:2px;background:var(--ink);opacity:.25}
+  .ctick{position:absolute;bottom:0;transform:translateX(-50%);font-size:11px;color:var(--muted);
+         font-variant-numeric:tabular-nums}
+  .ctick::after{content:"";position:absolute;left:50%;top:-6px;width:1px;height:6px;background:var(--line)}
+  .cthumb{position:absolute;display:flex;flex-direction:column;align-items:center;gap:2px;
+          text-decoration:none;filter:drop-shadow(0 1px 2px rgba(9,17,30,.25))}
+  .cthumb img{width:46px;height:auto;max-height:62px;object-fit:contain;border-radius:4px;
+              border:1px solid var(--line);background:#eef2f7;display:block}
+  .cthumb .crank{position:absolute;top:-9px;left:-6px;font-size:10px;font-weight:700;color:#fff;
+                 background:var(--blue);border-radius:999px;padding:0 5px;line-height:14px}
+  .cthumb .cscore{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  details#parsed{border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+  details#parsed summary{cursor:pointer}
+  details#parsed table{margin-top:6px}
   .hidden{display:none}
   .rank{color:var(--muted);font-weight:700;margin-right:7px}
   #spread .sp{margin-top:2px}
@@ -118,7 +127,9 @@
 <main>
   <div class="card">
     <h2>1 · Paste your list of images</h2>
-    <label>One per line. Any of these forms work — mix them freely:</label>
+    <label>One per line — filenames, <code>File:</code> titles, Commons/upload/thumb URLs or
+      wikitext, mixed freely <span class="meter">(full rules &amp; accepted formats: <b>About</b>,
+      section 2)</span></label>
     <textarea id="input" spellcheck="false">Foo.jpg
 File:Foo.jpg
 https://commons.wikimedia.org/wiki/File:Foo.jpg
@@ -131,30 +142,11 @@ https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</textarea>
       <span id="budget" class="meter">budget: —</span>
     </div>
     <div id="warnings" class="warn" style="margin-top:8px"></div>
-    <div id="parsed" class="hidden" style="margin-top:10px">
+    <details id="parsed" style="margin-top:10px">
+      <summary id="parsedsummary" class="meter">resolved inputs</summary>
       <table><thead><tr><th>#</th><th>Input</th><th>Resolved to</th><th>Size</th><th>Licence</th></tr></thead>
       <tbody id="parsedbody"></tbody></table>
-    </div>
-  </div>
-
-  <div class="card help">
-    <h2>Accepted formats</h2>
-    <p style="margin:0 0 8px"><code>Foo.jpg</code> · <code>File:Foo.jpg</code> ·
-      <code>commons.wikimedia.org/wiki/File:Foo.jpg</code> ·
-      <code>https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</code> ·
-      <code>…/thumb/0/06/Foo.jpg/640px-Foo.jpg</code> ·
-      <code>Special:FilePath/Foo.jpg</code> ·
-      <code>…/w/index.php?title=File:Foo.jpg</code> ·
-      <code>[[File:Foo.jpg|thumb|caption]]</code></p>
-    <p class="meter" style="margin:0">Case, underscores, <code>%20</code> encoding, bullets/numbering and
-      quotes are all tolerated; duplicates are merged. A comma or semicolon only separates two entries
-      when another entry follows it (a <code>File:</code> prefix, a URL, <code>[[</code>), so file names
-      that contain a comma — <code>…(In die Sonne schauen, Cannes 2025).jpg</code> — stay intact, and
-      <code>Foo.jpg, Bar.jpg</code> still splits.
-      Non-photo media (SVG, PDF, video keyframes) resolve too — Commons renders a raster thumbnail.
-      Category listings are <em>not</em> supported yet (paste the file names instead).
-      For the exact request sent to Clef and what every answer means, press
-      <b>About</b> (top right) — including the verbatim prompt and the quality legend.</p>
+    </details>
   </div>
 
   <div class="card" id="progresscard">
@@ -347,6 +339,57 @@ function renderChart(job) {
       }).join("");
 }
 
+// end-of-run chart: the photos plotted as mini thumbnails along a composite axis, 0 → the best
+// score plus headroom, so the field's shape is visible at a glance. Thumbs that would overlap are
+// stacked into lanes above the axis. Composite is our arithmetic, not a model probability.
+function renderChart(job) {
+  const el = $("chart");
+  if (!el) return;
+  if (job.status !== "done" && job.status !== "error") { el.innerHTML = ""; return; }
+  const done = (job.items || []).filter(i => i.status === "done" && i.composite != null)
+    .sort((a, b) => a.composite - b.composite);
+  if (!done.length) { el.innerHTML = ""; return; }
+  const max = done[done.length - 1].composite;
+  const top = Math.min(1, Math.ceil((max * 1.1 + 0.02) * 10) / 10);   // one-decimal ceiling w/ headroom
+  el.innerHTML = `<b class="big">composite by photo</b> <span class="meter">axis 0 → ${fmt(top, 1)}
+    (best photo ${fmt(max)}) · our arithmetic, min(face, eyes) × pose weight — not a model probability
+    · thumbs stack when they would overlap</span>
+    <div class="chartbox"><div class="caxis"></div></div>`;
+  const box = el.querySelector(".chartbox");
+  const w = box.clientWidth || 800;
+  const TW = 46, GAP = 10, ROW = 78;                 // thumb width, min gap, lane height (px)
+  const LANES_MAX = 5;
+  const lanes = [];                                  // each lane: last x (px) occupied
+  const placed = done.map((it) => {
+    const x = (it.composite / top) * w;
+    let lane = 0;
+    while (lane < LANES_MAX && lanes[lane] != null && Math.abs(x - lanes[lane]) < TW + GAP) lane++;
+    lanes[lane] = x;
+    return {it, x, lane};
+  });
+  const maxLane = Math.max(...placed.map(p => p.lane));
+  // lane L thumb top = L*ROW + 26 + ~76 (thumb + score); + margin so it never overlaps the heading
+  box.style.height = (maxLane * ROW + 108) + "px";
+  box.insertAdjacentHTML("beforeend", placed.map((p, i) => {
+    const it = p.it;
+    const title = it.title || it.raw || "";
+    const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
+    const rank = done.length - i;                                  // list is ascending; 1 = best
+    return `<a class="cthumb" style="left:${Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0)}px;
+        bottom:${(p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}" target="_blank"
+        rel="noopener" title="${rank}. ${esc(title)} — composite ${fmt(it.composite)}">
+      <span class="crank">${rank}</span>
+      <img src="${it.thumburl || ""}" alt="" loading="lazy" decoding="async">
+      <span class="cscore">${fmt(it.composite)}</span></a>`;
+  }).join(""));
+  // ticks: 0.1 steps across the axis
+  for (let v = 0; v <= top + 1e-9; v += 0.1) {
+    box.insertAdjacentHTML("beforeend",
+      `<span class="ctick" style="left:${((Math.round(v * 10) / 10) / top * 100).toFixed(2)}%">${v.toFixed(1)}</span>`);
+  }
+}
+window.addEventListener("resize", () => { if (lastJob) renderChart(lastJob); });
+
 // the metric the run reports: separation among candidates, not standard deviation
 function renderSpread(sp) {
   const el = $("spread");
@@ -506,8 +549,10 @@ $("check").onclick = async () => {
       <td>${i + 1}</td><td>${esc(it.raw)}</td>
       <td>${it.ok ? esc(it.title) + (it.pageid ? ` <a href="https://commons.wikimedia.org/?curid=${it.pageid}" target="_blank" rel="noopener">↗</a>` : "") : `<span class="warn">${esc(it.error || "not found")}</span>`}</td>
       <td>${it.orig_w ? it.orig_w + "×" + it.orig_h : "—"}</td><td>${esc(it.license || "—")}</td></tr>`).join("");
-    $("parsed").classList.remove("hidden");
     const ok = (d.items || []).filter(i => i.ok).length;
+    $("parsedsummary").textContent = `resolved inputs — ${ok} of ${(d.items || []).length}`
+      + ` (expand for the table)`;
+    $("parsed").open = false;               // stay collapsed; the pill beside the buttons already counts
     $("parseinfo").textContent = `${ok} of ${(d.items || []).length} resolved`;
     $("warnings").innerHTML = (d.warnings || []).map(w => `skipped “${esc(w.raw)}” — ${esc(w.reason)}`).join("<br>");
     $("run").disabled = ok === 0;
