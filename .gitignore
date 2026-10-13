@@ -10,3 +10,4 @@ static/_index_extracted.js
 *.log
 server.log
 .DS_Store
+.playwright-cli/
