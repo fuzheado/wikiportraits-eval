@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.4.2 · stdlib Python only · last full test pass 2026-10-13
+App version 0.5.0 · stdlib Python only · last full test pass 2026-10-13
 
 ---
 
@@ -79,18 +79,28 @@ UI changes.**
    the browser hotlinking result thumbnails (a deliberate bandwidth choice). If you add a proxy, mind
    the traffic.
 7. **429 means stop, not retry harder.** One retry after the server's own `retry-after`, then report.
-   No retry loops, no "just add workers".
-8. **The composite is our arithmetic, not the model's.** `min(face_visible, eyes_to_camera) × pose
+   No retry loops. `INFLIGHT` (default 2) workers are allowed within a run — but every call start
+   is reserved through `_next_slot()`, so starts stay SPACING apart *globally*: from the endpoint's
+   point of view the app still looks like one well-paced client, and the budget caps the hour.
+8. **Input is hostile until proven Wikimedia.** Every URL goes through `wiclient._clean_host()`
+   (strict fullmatch on a Wikimedia project domain; userinfo/ports/IP literals rejected) and any
+   explicit non-http(s) scheme is refused. Fetches only ever target thumbnail URLs returned by a
+   Wikimedia Action API — never a URL parsed out of user input — and are byte-capped
+   (`MAX_THUMB_BYTES`, streamed) and pixel-capped (`MAX_SEND_PIXELS`). Runs are item-capped
+   (`MAX_INPUT_ITEMS`), the job store is bounded (`MAX_JOBS_KEPT`), and /api/parse is capped
+   (`PARSE_MAX`). Do not "simplify" any of these: each one closes a named hole
+   (SSRF-via-userinfo, oversized media, unbounded memory/queue).
+9. **The composite is our arithmetic, not the model's.** `min(face_visible, eyes_to_camera) × pose
    weight` is computed in `wiclient.composite()` and must be labelled as ours everywhere it appears —
    the UI row, the About panel, the report method block, the README. Never present it as a model
    probability: that would make the number unattributable, which is the one thing this app is built
    not to do. `P(publish)` and `P(infobox)` are the model's own and are always shown beside it.
-9. **Report candidate spread, never standard deviation.** sd rises whenever answers pile up at either
+10. **Report candidate spread, never standard deviation.** sd rises whenever answers pile up at either
    end, *including at the ceiling*, so it rewards exactly the failure we already measured (rewrites
    that pushed every portrait to 0.81-0.96 and shrank the range between them from 0.486 to 0.021).
    `candidate_spread()` reports candidates above a floor, their range, the median gap between
    neighbours, and the dead-zone share — see §11 and `research/wording-experiment-2026-10-13.md`.
-10. **Reports must not depend on the network.** Thumbnails are saved to `cache/thumbs/` at fetch time
+11. **Reports must not depend on the network.** Thumbnails are saved to `cache/thumbs/` at fetch time
     and the PDF embeds those bytes, so a report reads the same offline. If you add a new report
     format, embed from `thumb_bytes(item)` (saved copy first, Commons as fallback) rather than
     hotlinking. Also: draw the hairline frame around every embedded image — a white-on-transparent

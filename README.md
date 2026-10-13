@@ -156,11 +156,14 @@ python3 app.py                 # http://127.0.0.1:8765
 PORT=8080 python3 app.py       # honour a supplied port (Toolforge does this)
 ```
 
-Optional settings: `THUMB_WIDTH` (640), `SPACING` (0.9 s between calls), `HOURLY_BUDGET` (100),
-`MAX_PARALLEL_JOBS` (2), `EVAL_MAX` (25, the per-call cap for `POST /api/eval`),
+Optional settings: `THUMB_WIDTH` (640), `SPACING` (0.9 s between call *starts*, global across
+`INFLIGHT` streams), `INFLIGHT` (2 concurrent model calls within a run), `HOURLY_BUDGET` (100),
+`MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run), `PARSE_MAX` (1000 per parse),
+`EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
+thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
 `PROBE_TTL` (600 s, how long a pre-flight verdict is reused), `CACHE_DIR` (`./cache`),
-`BASELINE_WARM_S` (0.54),
-`WIKIMEDIA_USER_AGENT` (please set your own contact URL if you deploy this).
+`BASELINE_WARM_S` (0.54), `WIKIMEDIA_USER_AGENT` (please set your own contact URL if you deploy
+this).
 
 ### Deploying to Toolforge
 

@@ -144,6 +144,36 @@ class Budget:
 
 
 # --------------------------------------------------------------------- inputs
+# Hard limits on fetched media. The app never fetches originals — only the API-returned
+# ~640 px-wide thumbnail — but a public tool must assume hostile input, so the fetch itself is
+# capped (streamed read) and anything that still arrives absurdly large is rejected before the
+# base64 payload is built. Both env-overridable.
+MAX_THUMB_BYTES = int(os.environ.get("MAX_THUMB_BYTES", str(20 * 1024 * 1024)))   # 20 MB
+MAX_SEND_PIXELS = int(os.environ.get("MAX_SEND_PIXELS", str(40 * 1000 * 1000)))   # 40 MP
+
+# A Wikimedia project host only (any subdomain depth, but the tail must be a Wikimedia
+# project domain). `re.fullmatch` — a substring/suffix test alone would admit
+# `commons.wikimedia.org@evil.com` (userinfo) or `commons.wikimedia.org.evil.com`.
+_MEDIA_HOST = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:wikipedia|wiktionary|wikibooks|"
+                         r"wikiquote|wikisource|wikiversity|wikivoyage|wikinews|wikidata|"
+                         r"wikimedia|wikifunctions|wikimediafoundation)\.org$")
+
+
+def _clean_host(netloc: str):
+    """Hostname from a URL netloc, or None when it cannot be a Wikimedia host.
+
+    Rejects userinfo (`user@host`), ports on anything but the standard 443-less form, IP
+    literals, and any host that does not end on a Wikimedia project domain. This is the only
+    place input URLs may direct our server-side fetches, so it fails closed.
+    """
+    if "@" in netloc:                       # userinfo — never legitimate in pasted references
+        return None
+    host = netloc.rsplit(":", 1)[0].strip().lower().rstrip(".")
+    if not host or _MEDIA_HOST.fullmatch(host) is None:
+        return None
+    return host
+
+
 _IMAGE_EXT = (".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".svg", ".pdf",
               ".djvu", ".xcf", ".webm", ".ogv", ".mp4", ".mp3", ".ogg", ".flac", ".wav", ".stl")
 _STRIP_PREFIX = re.compile(r"^\s*(?:[-*\u2022]|\d+[.)])\s*")
@@ -189,22 +219,25 @@ def _wiki_for(raw: str) -> str:
 
     Mirrors `commons-file-resolution` SOP 5 (files can live on other wikis) and the
     upload.wikimedia.org path convention: /wikipedia/<project>/… names the project.
+    Fails closed to Commons on anything not provably a Wikimedia host — the strict
+    `_clean_host` keeps userinfo/ports/IP shapes from ever selecting a per-wiki API host,
+    and fetches in this app always target API-returned thumbnail URLs anyway.
     """
     low = raw.lower()
     if not (re.match(r"^(https?:)?//", low) or re.match(r"^[\w.-]+\.(?:org|com|net|io)/", low)):
         return "commons.wikimedia.org"
     url = raw if low.startswith("http") else ("https:" + raw if raw.startswith("//") else "https://" + raw)
-    u = urllib.parse.urlsplit(url)
-    host, path = u.netloc.lower(), urllib.parse.unquote(u.path)
+    u = urllib.parse.urlsplit(url.replace("\\", "%5C"))
+    host, path = _clean_host(u.netloc), urllib.parse.unquote(u.path)
+    if host is None:
+        return "commons.wikimedia.org"
     if host.startswith(("upload.", "thumb.")):
         return _project_from_upload_path(path)
     if host.startswith("commons.m."):
         return "commons.wikimedia.org"
-    if host in ("commons.wikimedia.org", "commons.wikimedia.beta.wmcloud.org"):
-        return "commons.wikimedia.org"
-    if host.endswith((".wikipedia.org", ".wikimedia.org", ".wikisource.org", ".wiktionary.org",
-                      ".wikibooks.org", ".wikinews.org", ".wikiversity.org", ".wikivoyage.org",
-                      ".wikiquote.org")):
+    if host.endswith(".wikimedia.org"):
+        return host
+    if _MEDIA_HOST.fullmatch(host):
         return host
     return "commons.wikimedia.org"
 
@@ -276,6 +309,11 @@ def _norm_title(name: str) -> str:
 
 def _classify(raw: str):
     low = raw.lower()
+    # Any scheme:// other than http(s) is refused outright — ftp://, file://, ssh:// … none of
+    # them name a Commons file and none of them are ever fetched here. (Bare `File:`/`Image:`
+    # namespace titles have no `//` and fall through to the title handling below.)
+    if re.match(r"^[a-z][a-z0-9+.\-]*://", low) and not re.match(r"^https?://", low):
+        return None, "unsupported URL scheme (only http(s) to a Wikimedia project)"
     # Anything that looks like a URL or bare host/path (with or without a scheme).
     looks_like_url = bool(re.match(r"^(https?:)?//", low)) or bool(
         re.match(r"^[\w.-]+\.(?:org|com|net|io)/", low))
@@ -285,11 +323,12 @@ def _classify(raw: str):
             url = "https:" + raw
         elif not raw.lower().startswith("http"):
             url = "https://" + raw
-        u = urllib.parse.urlsplit(url)
-        host, path = u.netloc.lower(), urllib.parse.unquote(u.path)
+        u = urllib.parse.urlsplit(url.replace("\\", "%5C"))
+        host, path = _clean_host(u.netloc) or "", urllib.parse.unquote(u.path)
         query = urllib.parse.parse_qs(u.query)
-        if "wikimedia.org" not in host and "wikipedia.org" not in host:
-            return None, "not a Wikimedia URL"
+        if not host:
+            return None, ("not a Wikimedia URL (userinfo, port, IP literal, or not a "
+                          "Wikimedia project domain)")
         if "title" in query:                                   # index.php?title=File:…
             return _norm_title(query["title"][0]), None
         if host.startswith(("upload.", "thumb.")):             # direct media host
@@ -350,7 +389,7 @@ _UPLOAD_PROJECT = {"commons": "commons.wikimedia.org", "meta": "meta.wikimedia.o
 
 def _project_from_upload_path(path: str) -> str:
     parts = [p for p in path.split("/") if p]
-    if len(parts) >= 2 and parts[0] == "wikipedia":
+    if len(parts) >= 2 and parts[0] == "wikipedia" and re.fullmatch(r"[a-z0-9-]{2,20}", parts[1]):
         code = parts[1]
         return _UPLOAD_PROJECT.get(code, f"{code}.wikipedia.org" if len(code) <= 3 else
                                   f"{code}.wikimedia.org")
@@ -420,9 +459,21 @@ def resolve(items: list, batch: int = 50) -> dict:
 
 
 def fetch_bytes(url: str, timeout: int = 120) -> bytes:
+    """Fetch a thumbnail with a hard byte cap (MAX_THUMB_BYTES, streamed — never trusts a
+    Content-Length header, which can lie or be absent). Raises ValueError past the cap."""
     req = urllib.request.Request(url, headers={"User-Agent": UA})
+    got = 0
+    chunks = []
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+        while True:
+            chunk = r.read(65536)
+            if not chunk:
+                break
+            got += len(chunk)
+            if got > MAX_THUMB_BYTES:
+                raise ValueError(f"media exceeds MAX_THUMB_BYTES ({MAX_THUMB_BYTES} bytes)")
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def image_size(data: bytes):

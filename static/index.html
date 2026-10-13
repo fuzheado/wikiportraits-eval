@@ -38,7 +38,15 @@
   .num{text-align:right;font-variant-numeric:tabular-nums}
   .big{font-size:22px;font-weight:650}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
-  .stat{border:1px solid var(--line);border-radius:8px;padding:10px}
+  #stats{display:flex;gap:12px;flex-wrap:wrap;align-items:stretch}
+  .statgroup{border:1px solid var(--line);border-radius:8px;padding:10px;flex:1 1 260px;
+             min-width:230px}
+  .statgroup .glabel{font-size:11.5px;font-weight:650;color:var(--muted);margin-bottom:8px;
+                     text-transform:uppercase;letter-spacing:.05em}
+  .statgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px}
+  .stat{border:1px solid var(--line);border-radius:8px;padding:8px}
+  .csize{padding:2px 10px;font-size:12px}
+  .csize.active{background:var(--blue);border-color:var(--blue);color:#fff}
   .stat .k{font-size:12px;color:var(--muted)}
   .item{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px;
         display:flex;gap:12px;align-items:flex-start}
@@ -67,7 +75,6 @@
   .warn{color:var(--amber);font-size:13px}
   .ok{color:var(--green);font-weight:600}
   .clock{font-variant-numeric:tabular-nums}
-  .cbar{margin:7px 0}
   .chartbox{position:relative;margin-top:10px;border-bottom:1px solid var(--line)}
   .chartbox .caxis{position:absolute;left:0;right:0;bottom:20px;height:2px;background:var(--ink);opacity:.25}
   .ctick{position:absolute;bottom:0;transform:translateX(-50%);font-size:11px;color:var(--muted);
@@ -161,6 +168,12 @@ https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</textarea>
     <div id="spread" class="meter" style="margin-top:6px"></div>
     <div id="stats" class="grid" style="margin-top:14px"></div>
     <div id="chart" style="margin-top:14px"></div>
+    <div class="row" id="chartsizerow" style="margin-top:8px" hidden>
+      <span class="meter">thumbnail size on the axis:</span>
+      <button id="cs-s" class="csize" title="small">S</button>
+      <button id="cs-m" class="csize" title="medium">M</button>
+      <button id="cs-l" class="csize" title="large">L</button>
+    </div>
   </div>
 
   <div class="card">
@@ -314,31 +327,6 @@ function renderItem(it, i, rank) {
   return key;
 }
 
-// end-of-run chart: one horizontal bar per photo, scaled to the best composite in the run,
-// so the field can be read at a glance. Composite is our arithmetic, not a model probability.
-function renderChart(job) {
-  const el = $("chart");
-  if (!el) return;
-  if (job.status !== "done" && job.status !== "error") { el.innerHTML = ""; return; }
-  const done = (job.items || []).filter(i => i.status === "done" && i.composite != null)
-    .sort((a, b) => b.composite - a.composite);
-  if (done.length < 2) { el.innerHTML = ""; return; }
-  const max = done[0].composite;
-  el.innerHTML = `<b class="big">composite by photo</b> <span class="meter">our arithmetic
-    (min(face, eyes) × pose weight) — not a model probability · bars scaled to the best photo
-    (${fmt(max)})</span>`
-    + done.map((it, ix) => {
-        const t = it.title || it.raw || "";
-        const short = t.length > 64 ? t.slice(0, 61) + "…" : t;
-        const pct = (it.composite / max * 100).toFixed(1);
-        const pubP = pubProbs((it.result || {}).answers?.publish_ready || {});
-        return `<div class="cbar"><div class="crow"><span class="clab"><span class="rank">#${ix + 1}</span>
-            ${esc(short)}</span><span class="val">${fmt(it.composite)}</span></div>
-          <div class="track"><div class="fill" style="width:${pct}%"></div></div>
-          <div class="csub">P(publish) ${fmt(pubP)} · P(infobox) ${fmt(it.result?.answers?.infobox_ready?.noul)}${it.from_cache ? " · cached" : ""}</div></div>`;
-      }).join("");
-}
-
 // end-of-run chart: the photos plotted as mini thumbnails along a composite axis, 0 → the best
 // score plus headroom, so the field's shape is visible at a glance. Thumbs that would overlap are
 // stacked into lanes above the axis. Composite is our arithmetic, not a model probability.
@@ -348,7 +336,7 @@ function renderChart(job) {
   if (job.status !== "done" && job.status !== "error") { el.innerHTML = ""; return; }
   const done = (job.items || []).filter(i => i.status === "done" && i.composite != null)
     .sort((a, b) => a.composite - b.composite);
-  if (!done.length) { el.innerHTML = ""; return; }
+  if (!done.length) { el.innerHTML = ""; const rowEl = $("chartsizerow"); if (rowEl) rowEl.hidden = true; return; }
   const max = done[done.length - 1].composite;
   const top = Math.min(1, Math.ceil((max * 1.1 + 0.02) * 10) / 10);   // one-decimal ceiling w/ headroom
   el.innerHTML = `<b class="big">composite by photo</b> <span class="meter">axis 0 → ${fmt(top, 1)}
@@ -357,8 +345,11 @@ function renderChart(job) {
     <div class="chartbox"><div class="caxis"></div></div>`;
   const box = el.querySelector(".chartbox");
   const w = box.clientWidth || 800;
-  const TW = 46, GAP = 10, ROW = 78;                 // thumb width, min gap, lane height (px)
+  const Z = CHART_SIZES[chartSize] || CHART_SIZES.m;
+  const TW = Z.TW, GAP = 10, ROW = Z.ROW;            // thumb width, min gap, lane height (px)
   const LANES_MAX = 5;
+  const rowEl = $("chartsizerow"); if (rowEl) rowEl.hidden = false;
+  markChartSize();
   const lanes = [];                                  // each lane: last x (px) occupied
   const placed = done.map((it) => {
     const x = (it.composite / top) * w;
@@ -368,8 +359,9 @@ function renderChart(job) {
     return {it, x, lane};
   });
   const maxLane = Math.max(...placed.map(p => p.lane));
-  // lane L thumb top = L*ROW + 26 + ~76 (thumb + score); + margin so it never overlaps the heading
-  box.style.height = (maxLane * ROW + 108) + "px";
+  // top of the highest thumb = maxLane*ROW + 26 + thumb height + score row; margin so the badge
+  // and image never overlap the heading above
+  box.style.height = (maxLane * ROW + 26 + Z.IMH + 26) + "px";
   box.insertAdjacentHTML("beforeend", placed.map((p, i) => {
     const it = p.it;
     const title = it.title || it.raw || "";
@@ -379,7 +371,8 @@ function renderChart(job) {
         bottom:${(p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}" target="_blank"
         rel="noopener" title="${rank}. ${esc(title)} — composite ${fmt(it.composite)}">
       <span class="crank">${rank}</span>
-      <img src="${it.thumburl || ""}" alt="" loading="lazy" decoding="async">
+      <img src="${it.thumburl || ""}" alt="" loading="lazy" decoding="async"
+           style="width:${Z.IMW}px;max-height:${Z.IMH}px">
       <span class="cscore">${fmt(it.composite)}</span></a>`;
   }).join(""));
   // ticks: 0.1 steps across the axis
@@ -407,19 +400,48 @@ function renderSpread(sp) {
     + one("P(infobox)", sp.infobox_ready);
 }
 
-function renderStats(s) {
+// stats, grouped so like reads with like: scores together, quality alone, time & tokens together
+// (batch wall, per-call wall, pipeline totals, token spend).
+const CHART_SIZES = {s: {TW: 30, ROW: 58, IMW: 30, IMH: 44},
+                     m: {TW: 46, ROW: 78, IMW: 46, IMH: 62},
+                     l: {TW: 72, ROW: 118, IMW: 72, IMH: 96}};
+let chartSize = (function () { try { return localStorage.getItem("wp-chart-size") || "m"; }
+                              catch (e) { return "m"; } })();
+
+function setChartSize(s) {
+  chartSize = s;
+  try { localStorage.setItem("wp-chart-size", s); } catch (e) {}
+  markChartSize();
+  if (lastJob) renderChart(lastJob);
+}
+function markChartSize() {
+  ["s", "m", "l"].forEach(k => { const b = $("cs-" + k); if (b) b.classList.toggle("active", k === chartSize); });
+}
+["s", "m", "l"].forEach(k => { const b = $("cs-" + k); if (b) b.onclick = () => setChartSize(k); });
+
+function renderStats(job) {
+  const s = job.stats || {};
   if (!s || !s.n_scored) return "";
   const cell = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="big">${v}</div></div>`;
-  return cell("scored", `${s.n_scored}/${s.n_input}`)
-    + cell("mean composite", fmt(s.composite_mean))
-    + cell("mean P(publish)", fmt(s.p_publish_mean))
-    + cell("mean P(infobox)", fmt(s.p_infobox_mean))
-    + cell("median P(infobox)", fmt(s.p_infobox_median))
-    + cell("max P(infobox)", fmt(s.p_infobox_max))
-    + cell("≥ 0.5 infobox-ready", s.n_above_half)
-    + cell("mean quality /4", fmt(s.quality_mean, 2))
-    + cell("input tokens", s.tokens_total)
-    + cell("median wall", `${fmt(s.wall_median_s, 2)}s`);
+  const group = (label, cells) => `<div class="statgroup"><div class="glabel">${label}</div>
+      <div class="statgrid">${cells}</div></div>`;
+  const pl = job.pipeline;
+  const e = job.elapsed_s;
+  return group("Scores", cell("scored", `${s.n_scored}/${s.n_input}`)
+      + cell("mean composite", fmt(s.composite_mean))
+      + cell("mean P(publish)", fmt(s.p_publish_mean))
+      + cell("mean P(infobox)", fmt(s.p_infobox_mean))
+      + cell("median P(infobox)", fmt(s.p_infobox_median))
+      + cell("max P(infobox)", fmt(s.p_infobox_max))
+      + cell("≥ 0.5 infobox-ready", s.n_above_half))
+    + group("Quality", cell("mean quality /4", fmt(s.quality_mean, 2)))
+    + group("Time & tokens", cell("batch wall", `${fmt(e, 1)}s`)
+      + cell("median call", `${fmt(s.wall_median_s, 2)}s`)
+      + (pl ? cell("downloads", `${pl.download_s}s`) : "")
+      + (pl ? cell("model time", `${pl.model_s}s`) : "")
+      + (pl ? cell("serial est.", `${pl.serial_estimate_s}s`) : "")
+      + (pl && pl.saved_s > 0.05 ? cell("saved by pipeline", `${pl.saved_s}s`) : "")
+      + cell("input tokens", s.tokens_total));
 }
 
 function renderJob(job) {
@@ -434,7 +456,7 @@ function renderJob(job) {
   $("timing").textContent = `elapsed ${Number(e).toFixed(1)}s`
     + (pl ? ` · downloads ${pl.download_s}s + model ${pl.model_s}s (serial est. ${pl.serial_estimate_s}s, `
             + `${pl.prefetch_depth} buffered)` : "");
-  $("stats").innerHTML = renderStats(job.stats);
+  $("stats").innerHTML = renderStats(job);
   lastLatency = job.latency || lastLatency;
   const L = job.latency;
   const doneItems = (job.items || []).filter(i => i.status === "done");

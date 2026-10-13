@@ -13,6 +13,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(HERE, "cache"))
 MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
+INFLIGHT = max(1, int(os.environ.get("INFLIGHT", "2")))   # concurrent model calls within a run
+MAX_INPUT_ITEMS = int(os.environ.get("MAX_INPUT_ITEMS", "200"))  # cap per run (DoS guard)
 EVAL_MAX = int(os.environ.get("EVAL_MAX", "25"))       # per-call cap for POST /api/eval
 PROBE_TTL = float(os.environ.get("PROBE_TTL", "600"))  # reuse a pre-flight answer for 10 min
 PREFETCH = max(1, int(os.environ.get("PREFETCH", "2")))   # images buffered ahead of the model call
@@ -22,6 +24,8 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 BUDGET = Budget(limit=int(os.environ.get("HOURLY_BUDGET", "100")))
 JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
+MAX_JOBS_KEPT = int(os.environ.get("MAX_JOBS_KEPT", "100"))   # bounded job history (memory guard)
+PARSE_MAX = int(os.environ.get("PARSE_MAX", "1000"))         # cap /api/parse resolve batches
 
 
 # ------------------------------------------------------------------ job store
@@ -38,7 +42,12 @@ def new_job(payload):
                       "wiki": e.get("wiki", "commons.wikimedia.org")} for e in entries],
            "log": [], "stats": {}, "elapsed_s": None}
     with JOBS_LOCK:
+        # keep the job store bounded: finished/errored jobs are evicted oldest-first so a client
+        # that spams runs cannot grow server memory without limit (live jobs are never evicted).
         JOBS[job["id"]] = job
+        finished = [j for j in JOBS.values() if j["status"] in ("done", "error")]
+        for old in sorted(finished, key=lambda j: j["created"])[:-MAX_JOBS_KEPT]:
+            JOBS.pop(old["id"], None)
     return job
 
 
@@ -152,12 +161,17 @@ def thumb_bytes(item):
 def _download(item):
     """Fetch one thumbnail, keep the bytes for the reports, and base64-encode them.
 
-    Returns (b64, sent_px, seconds).
+    Returns (b64, sent_px, seconds). Raises ValueError on over-cap media (bytes via
+    wiclient.fetch_bytes, pixels here) — the prefetch thread turns that into an 'error' row,
+    so a pathological file cannot clog the pipeline.
     """
     t = time.time()
     data = wiclient.fetch_bytes(item["thumburl"])
-    _save_thumb(item, data)
     size = wiclient.image_size(data)
+    if size and size[0] * size[1] > wiclient.MAX_SEND_PIXELS:
+        raise ValueError(f"rendered thumbnail is {size[0]}x{size[1]} px — above the "
+                         f"{wiclient.MAX_SEND_PIXELS}-px cap")
+    _save_thumb(item, data)
     return (base64.b64encode(data).decode(), f"{size[0]}x{size[1]}" if size else "unknown",
             time.time() - t)
 
@@ -236,6 +250,23 @@ def latency_summary(job: dict) -> dict:
 
 
 # ------------------------------------------------------------------- worker
+_slot_lock = threading.Lock()
+_slot_next = [0.0]           # earliest time the next model call may start (global pacing)
+
+
+def _next_slot() -> float:
+    """Reserve the next model-call start, SPACING apart globally. Returns the wait in seconds.
+
+    With INFLIGHT > 1 this is what keeps several streams looking like one well-paced client:
+    starts never bunch up, and the inter-call gap stays exactly what it was serially.
+    """
+    now = time.time()
+    with _slot_lock:
+        t = max(now, _slot_next[0] + SPACING)
+        _slot_next[0] = t
+    return max(0.0, t - now)
+
+
 def _endpoint_probe() -> dict:
     """Pre-flight the endpoint once per PROBE_TTL and reuse the verdict for later runs."""
     if time.time() - _PROBE.get("t", 0) < PROBE_TTL and _PROBE.get("result"):
@@ -350,29 +381,71 @@ def run_job(job):
             log(job, f"finished in {job['elapsed_s']}s")
             return
         log(job, f"endpoint check ok — answered a text-only pre-flight in {probe.get('wall_s')}s")
-        log(job, f"pipeline: downloading ahead ({PREFETCH} buffered) while the model answers")
+        log(job, f"pipeline: downloading ahead ({PREFETCH} buffered) while the model answers, "
+                 f"{INFLIGHT} call(s) in flight, spaced {SPACING}s")
         q: queue.Queue = queue.Queue(maxsize=PREFETCH)
+        out: queue.Queue = queue.Queue()
         stop = threading.Event()
         t_pipe = time.time()
         threading.Thread(target=_prefetch, args=(pending, q, stop, job), daemon=True).start()
-        for idx, _ in enumerate(pending):
-            kind, item, payload, sent_px, dt = q.get()
+
+        def scorer():
+            """One of up to INFLIGHT workers: turn a downloaded image into a model answer.
+
+            Call starts are paced globally (SPACING apart, whichever worker they come from), so
+            two in-flight calls still look like one polite client to the endpoint — budget and
+            the one-retry-then-stop 429 rule are unchanged. The win: a cold-start dimension load
+            (~6 s for a never-seen width×height on this platform) is paid by one call while the
+            other stream waits on an already-warm dimension instead of the whole queue doing so.
+            """
+            while not stop.is_set():
+                try:
+                    kind, item, payload, sent_px, dt = q.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if kind == "end":
+                    out.put(("end", None, None, None, 0.0))
+                    return
+                if kind == "err":
+                    out.put(("err", item, payload, None, 0.0))
+                    continue
+                out.put(("start", item, payload, sent_px, dt))
+                delay = _next_slot()
+                if delay > 0:
+                    time.sleep(delay)
+                item["status"] = "scoring"
+                item["scoring_started"] = time.time()  # the UI ticks its "waiting for the model" clock
+                item["sent_px"] = sent_px
+                res = wiclient.score_image(payload, BUDGET)
+                if res.get("http") == 429:
+                    item["rate_limited"] = True
+                    log(job, f"429 — waiting {res.get('retry_after')}s, then one retry")
+                    res = wiclient.score_image(payload, BUDGET)
+                item["scoring_s"] = round(time.time() - item["scoring_started"], 2)
+                out.put(("res", item, res, None, dt))
+
+        threads = [threading.Thread(target=scorer, daemon=True) for _ in range(INFLIGHT)]
+        for t in threads:
+            t.start()
+        # the loop counts *terminal* events only: one "res" (or "err") per pending item.
+        # "start" events make the scoring state visible but do not count; "end" (prefetch
+        # exhausted) is noted and waited through, never a break — results may still be draining.
+        finished = 0
+        while finished < len(pending):
+            kind, item, payload, sent_px, dt = out.get()
             if kind == "end":
-                break
+                continue
             if kind == "err":
+                finished += 1
                 log(job, f"{item['title']} — fetch failed: {payload}")
                 _progress(job)
                 continue
-            fetch_s += dt
-            item["status"] = "scoring"
-            item["scoring_started"] = time.time()      # the UI ticks its "waiting for the model" clock
-            item["sent_px"] = sent_px
-            res = wiclient.score_image(payload, BUDGET)
-            if res.get("http") == 429:
-                item["rate_limited"] = True
-                log(job, f"429 — waiting {res.get('retry_after')}s, then one retry")
-                res = wiclient.score_image(payload, BUDGET)
-            item["scoring_s"] = round(time.time() - item["scoring_started"], 2)
+            if kind == "start":
+                fetch_s += dt
+                continue
+            # kind == "res": a model answer (or error) for one item
+            finished += 1
+            res = payload
             if res.get("http") == 200:
                 item.update({"status": "done", "resolved": True, "result": res, "from_cache": False})
                 cache_put(item["pageid"], item.get("sha1"),
@@ -393,8 +466,6 @@ def run_job(job):
                 log(job, f"{item['title']} — failed: {res.get('error')}")
             _refresh_derived(job)          # this photo is readable now, not at the end of the run
             _progress(job)
-            if idx < len(pending) - 1:
-                time.sleep(SPACING)          # no trailing pause: keeps the phase wall comparable
         stop.set()
         scoring_s = round(time.time() - t_pipe, 2)
         job["pipeline"] = {"images": len(pending), "prefetch_depth": PREFETCH,
@@ -420,7 +491,7 @@ def run_job(job):
 
 
 # ------------------------------------------------------------------- about
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.5.0"
 MODEL_CARD = "https://huggingface.co/Cloudflare/clef-flash"
 WIKITECH_PAGE = "https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models"
 
@@ -704,6 +775,9 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
                 if len(files) > EVAL_MAX:
                     return js({"error": f"at most {EVAL_MAX} files per /api/eval call "
                                         f"(got {len(files)})"}, 413)
+                if len(files) > MAX_INPUT_ITEMS:
+                    return js({"error": f"at most {MAX_INPUT_ITEMS} images per run "
+                                        f"(MAX_INPUT_ITEMS; got {len(files)})"}, 413)
                 active = [j for j in JOBS.values() if j["status"] in ("queued", "running")]
                 if len(active) >= MAX_PARALLEL_JOBS:
                     return js({"error": "another run is already in progress"}, 409)
@@ -720,6 +794,9 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
                                        for f in ("md", "json", "csv", "pdf")}})
             if path == "/api/parse":
                 parsed = wiclient.parse_entries(data.get("text", ""))
+                if len(parsed["items"]) > PARSE_MAX:
+                    return js({"error": f"at most {PARSE_MAX} images per parse request "
+                                        f"(got {len(parsed['items'])})"}, 413)
                 titles = [{"title": i["title"], "wiki": i.get("wiki")} for i in parsed["items"]]
                 meta = wiclient.resolve(titles) if titles else {}
                 def _m(e):
@@ -741,6 +818,11 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
                 job = new_job(data.get("items") or data.get("text", ""))
                 if not job["items"]:
                     return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
+                if len(job["items"]) > MAX_INPUT_ITEMS:
+                    del JOBS[job["id"]]
+                    return js({"error": f"at most {MAX_INPUT_ITEMS} images per run "
+                                        f"(MAX_INPUT_ITEMS; got {len(job['items'])}) — split the "
+                                        "list across runs; the hourly budget is the other guardrail"}, 413)
                 threading.Thread(target=run_job, args=(job,), daemon=True).start()
                 return js({"job_id": job["id"], "total": job["progress"]["total"]})
             return js({"error": "not found"}, 404)

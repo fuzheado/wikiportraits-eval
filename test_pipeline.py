@@ -140,15 +140,23 @@ if lat.get("median_s") is None:
 # mid-run readability: photos that have settled must carry their numbers before the run ends.
 # (Regression: the composite, P(publish), spread and stats used to be computed only after the last
 # photo, so a 20-minute run showed nothing at all until it was over.)
-mid = snapshots[1] if len(snapshots) > 1 else {}
-if mid.get("done", 0) < 1:
-    failures.append(f"expected the first photo to be done while the second is scored: {snapshots}")
-if mid.get("derived", 0) < 1:
-    failures.append("a settled photo had no composite while later photos were still being scored")
-if mid.get("spread_n", 0) < 1:
-    failures.append("the spread was still empty mid-run although photos had settled")
-if not mid.get("stats"):
-    failures.append("the stats grid was still empty mid-run")
+# With INFLIGHT > 1 the first result now lands *after* a later call has started (the streams
+# overlap), so the readable moment is "the first settled photo" — the first snapshot with
+# done >= 1 — not necessarily snapshot[1].
+mid = next((s for s in snapshots if s.get("done", 0) >= 1), None)
+if mid is None:
+    failures.append(f"no photo was readable while the run was still going: {snapshots}")
+    mid = {}
+else:
+    if mid.get("derived", 0) < 1:
+        failures.append("a settled photo had no composite while later photos were still being scored")
+    if mid.get("spread_n", 0) < 1:
+        failures.append("the spread was still empty mid-run although photos had settled")
+    if not mid.get("stats"):
+        failures.append("the stats grid was still empty mid-run")
+if not any(s.get("done", 0) == 0 for s in snapshots):
+    failures.append(f"no true mid-run state observed (every snapshot already had a done photo): "
+                    f"{snapshots}")
 missing_mid = [i["title"] for i in job["items"] if i["status"] == "done"
                and (i.get("composite") is None or i.get("publish_p") is None)]
 if missing_mid:
