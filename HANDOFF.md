@@ -167,10 +167,19 @@ concurrency; you will only burn quota.
   (`serve/` for tunnel logs, `.venv-pdf` for the pypdfium2/pypdf dev venv).
 - Preview deployment: a quick Cloudflare tunnel (`start_tunnel.py`, URL and log in `serve/`).
   A quick tunnel dies with the process — it is a preview, not a deployment.
-- **Not yet deployed to Toolforge.** Deploy target: the tool **`wikiportraits-eval`**
-  (`https://wikiportraits-eval.toolforge.org`), GitHub repo `wikiportraits-eval`. Ready to go:
-  `Procfile`, `.python-version` (3.12), `wsgi.py`, MIT `LICENSE`, and `package.sh` for a
-  source-only tarball.
+- **Deployed to Toolforge 2026-10-13** as the tool **`wikiportraits-eval`**
+  (`https://wikiportraits-eval.toolforge.org`), Build Service backend, source
+  `https://github.com/Fuzheado/wikiportraits-eval` (public, MIT). Deploy command set:
+  `toolforge build start https://github.com/Fuzheado/wikiportraits-eval` then
+  `toolforge webservice buildservice start --mount=none -m 512Mi`; logs via
+  `kubectl logs deployment/wikiportraits-eval` from the tool account.
+- At deploy time the **LiftWing `llm-clef-flash` engine was down** (HTTP 500
+  `Error during inference: EngineCore encountered an issue`, ~0.1 s, text-only and image alike,
+  from both the Mac and the WMCS origin) — Commons resolution, thumbnails, jobs and error
+  handling all verified working around it. Re-run `python3 verify_live_two.py <URL>` (1 fresh
+  call) and `python3 test_ui_contract.py <URL>` once the endpoint recovers.
+- Preview alternative: a quick Cloudflare tunnel (`start_tunnel.py`, URL and log in `serve/`).
+  A quick tunnel dies with the process — it is a preview, not a deployment.
 - **The first thing to do on Toolforge (planned experiment):** run `probe_latency_now.py` from a
   Toolforge shell and compare with the same script from the development host — same client, same
   files, same minute, only the origin IP differs. Then `live_pipeline_check.py` against the deployed

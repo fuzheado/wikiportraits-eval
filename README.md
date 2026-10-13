@@ -161,9 +161,9 @@ Build Service (no pip install needed — `Procfile` is already `web: python3 app
 ```bash
 ssh <user>@login.toolforge.org
 become <tool>
-toolforge build start https://github.com/<you>/<repo>
+toolforge build start https://github.com/Fuzheado/wikiportraits-eval
 toolforge webservice buildservice start --mount=none -m 512Mi
-curl https://<tool>.toolforge.org/api/health
+curl https://wikiportraits-eval.toolforge.org/api/health
 ```
 
 Traditional uWSGI backend: copy `core.py`, `wiclient.py`, `reports.py`, `pdfmin.py`, `static/` and
