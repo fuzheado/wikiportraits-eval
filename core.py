@@ -1,0 +1,674 @@
+"""Routing core shared by the http.server handler (app.py) and the WSGI shim (wsgi.py).
+
+Keeping it in one place means the Toolforge build path (`Procfile: python3 app.py`) and the
+traditional uWSGI path (`src/app.py` exposing `app`) run identical code.
+"""
+import base64, json, os, queue, re, threading, time, traceback, uuid
+from urllib.parse import urlparse
+
+import reports, wiclient
+from wiclient import (Budget, CANDIDATE_FLOOR, QUESTIONS, SCHEMA_HASH, STATE, THUMB_WIDTH, SPACING)
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATIC = os.path.join(HERE, "static")
+CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(HERE, "cache"))
+MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
+PREFETCH = max(1, int(os.environ.get("PREFETCH", "2")))   # images buffered ahead of the model call
+START = time.time()
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+BUDGET = Budget(limit=int(os.environ.get("HOURLY_BUDGET", "100")))
+JOBS: dict = {}
+JOBS_LOCK = threading.Lock()
+
+
+# ------------------------------------------------------------------ job store
+def new_job(payload):
+    if isinstance(payload, str):
+        parsed = wiclient.parse_entries(payload)
+        entries, warnings = parsed["items"], parsed["warnings"]
+    else:
+        entries = [{"raw": t, "title": t} for t in payload]
+        warnings = []
+    job = {"id": uuid.uuid4().hex[:12], "created": time.time(), "status": "queued",
+           "progress": {"done": 0, "total": len(entries)}, "warnings": warnings,
+           "items": [{"raw": e["raw"], "title": e["title"], "status": "pending",
+                      "wiki": e.get("wiki", "commons.wikimedia.org")} for e in entries],
+           "log": [], "stats": {}, "elapsed_s": None}
+    with JOBS_LOCK:
+        JOBS[job["id"]] = job
+    return job
+
+
+def cache_path(pageid, sha1, wiki="commons.wikimedia.org"):
+    # pageids are per-wiki and do collide, so the host is part of the key
+    safe = wiki.replace(":", "_")
+    return os.path.join(CACHE_DIR, f"{safe}-{pageid}-{sha1}-{SCHEMA_HASH}-{THUMB_WIDTH}.json")
+
+
+def cache_get(pageid, sha1, wiki="commons.wikimedia.org"):
+    p = cache_path(pageid, sha1, wiki)
+    if os.path.exists(p):
+        try:
+            with open(p) as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+    return None
+
+
+def cache_put(pageid, sha1, payload, wiki="commons.wikimedia.org"):
+    try:
+        with open(cache_path(pageid, sha1, wiki), "w") as fh:
+            json.dump(payload, fh)
+    except Exception:
+        pass
+
+
+def log(job, msg):
+    job["log"].append(f"{time.strftime('%H:%M:%S')} {msg}")
+    job["log"] = job["log"][-200:]
+
+
+def _progress(job):
+    job["progress"] = {"done": sum(1 for i in job["items"]
+                                   if i["status"] in ("done", "error", "notfound")),
+                       "total": len(job["items"])}
+    return job["progress"]
+
+
+THUMBS_DIR = os.path.join(CACHE_DIR, "thumbs")
+
+
+def _derive(item):
+    """The two numbers the UI shows per photo, set as soon as the photo is done.
+
+    Deliberately called at scoring time, not only when the run ends: a 24-photo run takes 20+
+    minutes at current endpoint speeds, and the first photos must be readable, ranked and
+    reportable long before the last one settles.
+    """
+    a = ((item.get("result") or {}).get("answers")) or {}
+    if not a:
+        return item
+    item["publish_p"] = wiclient.publish_p(a)
+    item["composite"] = wiclient.composite(a)
+    return item
+
+
+def thumb_path(pageid, sha1, wiki="commons.wikimedia.org"):
+    """Where the exact bytes sent to the model are kept, so reports can embed them offline."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", (wiki or "commons.wikimedia.org").split(".")[0])
+    return os.path.join(THUMBS_DIR, f"{safe}-{pageid}-{sha1}.img")
+
+
+def _save_thumb(item, data: bytes):
+    """Save the bytes sent to the model. Only filesystem problems are tolerated here.
+
+    Deliberately narrow: a bare `except Exception` in this spot once hid a NameError for hours
+    (the cache-hit path called `thumb_path()` outside this helper and died), so a coding error must
+    surface as a failure rather than as a silent "no thumbnail".
+    """
+    try:
+        os.makedirs(THUMBS_DIR, exist_ok=True)
+        p = thumb_path(item.get("pageid"), item.get("sha1"), item.get("wiki"))
+        with open(p, "wb") as fh:
+            fh.write(data)
+        item["thumb_file"] = p
+        return p
+    except OSError:
+        return None
+
+
+def saved_thumb(item):
+    """The path of a saved thumbnail for an already-answered photo, if it is still on disk."""
+    try:
+        p = thumb_path(item.get("pageid"), item.get("sha1"), item.get("wiki"))
+    except (NameError, TypeError):
+        raise
+    return p if os.path.exists(p) else None
+
+
+def thumb_bytes(item):
+    """Bytes for a report: from the saved file if present, else fetched from Commons."""
+    p = item.get("thumb_file")
+    if p and os.path.exists(p):
+        try:
+            with open(p, "rb") as fh:
+                return fh.read()
+        except Exception:                                        # noqa: BLE001
+            pass
+    if item.get("thumburl"):
+        try:
+            data = wiclient.fetch_bytes(item["thumburl"])
+            _save_thumb(item, data)
+            return data
+        except Exception:                                        # noqa: BLE001
+            return None
+    return None
+
+
+def _download(item):
+    """Fetch one thumbnail, keep the bytes for the reports, and base64-encode them.
+
+    Returns (b64, sent_px, seconds).
+    """
+    t = time.time()
+    data = wiclient.fetch_bytes(item["thumburl"])
+    _save_thumb(item, data)
+    size = wiclient.image_size(data)
+    return (base64.b64encode(data).decode(), f"{size[0]}x{size[1]}" if size else "unknown",
+            time.time() - t)
+
+
+def _prefetch(items, out, stop, job=None):
+    """Producer thread: download images ahead of the (serial) model caller.
+
+    The download half of the work is I/O-bound and the model call is a separate
+    round-trip, so one prefetch thread keeps the network busy while the model
+    answers for the previous image.
+
+    The item is marked `downloading` only while its bytes are actually in flight and
+    `ready` as soon as they are in hand — a row must never claim to be downloading
+    something it already holds (it may then wait in the queue for minutes).
+    """
+    for item in items:
+        if stop.is_set():
+            return
+        item["status"] = "downloading"
+        try:
+            b64, sent_px, dt = _download(item)
+        except Exception as e:                                  # noqa: BLE001 - report, don't die
+            item.update({"status": "error", "error": f"thumbnail fetch failed: {e}"})
+            out.put(("err", item, str(e), None, 0.0))
+            if job is not None:
+                _progress(job)
+            continue
+        item["status"] = "ready"
+        item["fetch_s"] = round(dt, 2)
+        out.put(("ok", item, b64, sent_px, dt))
+    out.put(("end", None, None, None, 0.0))
+
+
+# Measured on this install, not documented anywhere: median per-call latency of
+# llm-clef-flash over 62 recorded calls (2026-10-02: 23 calls, median 0.20-0.50s;
+# 2026-10-12: 39 calls, median 0.54s, worst 6.95s). Used only to label a run as
+# normal / elevated / service-side — see latency_summary().
+BASELINE_WARM_S = float(os.environ.get("BASELINE_WARM_S", "0.54"))
+SLOW_FACTOR = 4.0        # >4x baseline on every call = the endpoint, not the input
+
+
+def _median(vals):
+    v = sorted(vals)
+    n = len(v)
+    if not n:
+        return None
+    return round(v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2, 3)
+
+
+def latency_summary(job: dict) -> dict:
+    """Compare this job's model-call times against the measured warm baseline."""
+    calls = [i["result"]["wall_s"] for i in job["items"]
+             if (i.get("result") or {}).get("wall_s") is not None]
+    ttfb = [i["result"]["ttfb_s"] for i in job["items"]
+            if (i.get("result") or {}).get("ttfb_s") is not None]
+    upstream = [int(i["result"]["upstream_ms"]) for i in job["items"]
+                if str((i.get("result") or {}).get("upstream_ms") or "").isdigit()]
+    out = {"calls": len(calls), "baseline_s": BASELINE_WARM_S,
+           "median_s": _median(calls), "min_s": min(calls) if calls else None,
+           "max_s": max(calls) if calls else None,
+           "median_ttfb_s": _median(ttfb), "median_upstream_ms": _median(upstream)}
+    if calls:
+        out["factor"] = round(out["median_s"] / BASELINE_WARM_S, 1)
+        out["verdict"] = ("normal" if out["factor"] < 1.5 else
+                          "elevated" if out["factor"] < SLOW_FACTOR else "service-side")
+        out["note"] = {
+            "normal": f"model calls match the measured warm baseline "
+                      f"({BASELINE_WARM_S}s median over 62 calls on 2026-10-02/12)",
+            "elevated": f"model calls are {out['factor']}x the measured warm baseline — "
+                        f"usually a cold pod or a queued request",
+            "service-side": f"model calls are {out['factor']}x the measured warm baseline "
+                            f"({out['median_s']}s vs {BASELINE_WARM_S}s) with no 429s — the "
+                            f"slowdown is server-side, not the input, the image size, or this app",
+        }[out["verdict"]]
+    return out
+
+
+# ------------------------------------------------------------------- worker
+def _refresh_derived(job):
+    """Recompute the per-photo numbers and the run-level spread from whatever has settled.
+
+    Called after every photo settles, not just at the end of the run: with the endpoint at ~1 call
+    per minute, a 24-photo run is 20+ minutes long, and a reader must be able to see the composite,
+    the ranking and the spread for the photos that are already done.
+    """
+    for item in job["items"]:
+        _derive(item)
+    scored = [i for i in job["items"] if i.get("composite") is not None or
+              ((i.get("result") or {}).get("answers") or {}).get("infobox_ready")]
+    job["spread"] = {
+        "by": "composite",
+        "composite": wiclient.candidate_spread(
+            [(i.get("title") or i.get("raw"), i.get("composite")) for i in scored]),
+        "infobox_ready": wiclient.candidate_spread(
+            [(i.get("title") or i.get("raw"),
+              (i["result"]["answers"].get("infobox_ready") or {}).get("noul")) for i in scored]),
+        "publish_ready": wiclient.candidate_spread(
+            [(i.get("title") or i.get("raw"), i.get("publish_p")) for i in scored]),
+    }
+    sp = job["spread"]["composite"]
+    if sp.get("n") and sp.get("n") != job.get("_spread_logged_n"):
+        job["_spread_logged_n"] = sp["n"]
+        log(job, f"candidate spread (composite, {sp['n']} scored): {sp['n_candidates']} above "
+                 f"{sp['floor']} · range {sp['candidate_range']} · median gap "
+                 f"{sp['candidate_median_gap']} · {sp['dead_zone']} in the 0.35–0.65 band")
+    job["stats"] = reports.stats(job["items"])
+
+
+def run_job(job):
+    job["status"] = "running"
+    t0 = time.time()
+    try:
+        log(job, "resolving %d titles on %s" % (len(job["items"]),
+            ", ".join(sorted({i.get("wiki", "commons.wikimedia.org") for i in job["items"]}))))
+        meta = wiclient.resolve([{"title": i["title"], "wiki": i.get("wiki")} for i in job["items"]])
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = f"Commons lookup failed: {e}"
+        return
+    for item in job["items"]:
+        m = meta.get((item.get("wiki") or "commons.wikimedia.org", item["title"])) or {}
+        item.update({k: v for k, v in m.items() if k != "ok"})
+        if not m.get("ok"):
+            item["status"] = "notfound"
+            item["error"] = m.get("error", "not found")
+    log(job, f"resolved {sum(1 for i in job['items'] if i.get('pageid'))} of {len(job['items'])}")
+
+    # cache pass first, so the download thread only handles images that need scoring
+    pending = []
+    for item in job["items"]:
+        if item["status"] == "notfound":
+            continue
+        hit = cache_get(item["pageid"], item.get("sha1"), item.get("wiki", "commons.wikimedia.org"))
+        if hit:
+            item.update({"status": "done", "resolved": True, "result": hit["result"],
+                         "sent_px": hit.get("sent_px"), "from_cache": True})
+            item["thumb_file"] = saved_thumb(item)
+            if not item["thumb_file"] and item.get("thumburl"):
+                # the answer predates the thumbnail store (or it was cleaned out): fetch the bytes
+                # once from Commons so the reports stay self-contained. Commons is not the
+                # rate-limited service here, so this costs nothing against the model budget.
+                try:
+                    _save_thumb(item, wiclient.fetch_bytes(item["thumburl"]))
+                except Exception as exc:                          # noqa: BLE001 — never fatal
+                    log(job, f"{item['title']} — thumbnail not stored: {exc}")
+            _derive(item)
+            log(job, f"{item['title']} — cached")
+        else:
+            pending.append(item)
+    _progress(job)
+    if job["items"] and len(pending) < len(job["items"]):
+        log(job, f"{len(job['items']) - len(pending)} of {len(job['items'])} answered from cache "
+                 f"(no API call)")
+    _refresh_derived(job)          # cached photos are already readable before the slow ones start
+
+    fetch_s = score_s = 0.0
+    if pending:
+        log(job, f"pipeline: downloading ahead ({PREFETCH} buffered) while the model answers")
+        q: queue.Queue = queue.Queue(maxsize=PREFETCH)
+        stop = threading.Event()
+        t_pipe = time.time()
+        threading.Thread(target=_prefetch, args=(pending, q, stop, job), daemon=True).start()
+        for idx, _ in enumerate(pending):
+            kind, item, payload, sent_px, dt = q.get()
+            if kind == "end":
+                break
+            if kind == "err":
+                log(job, f"{item['title']} — fetch failed: {payload}")
+                _progress(job)
+                continue
+            fetch_s += dt
+            item["status"] = "scoring"
+            item["scoring_started"] = time.time()      # the UI ticks its "waiting for the model" clock
+            item["sent_px"] = sent_px
+            res = wiclient.score_image(payload, BUDGET)
+            if res.get("http") == 429:
+                item["rate_limited"] = True
+                log(job, f"429 — waiting {res.get('retry_after')}s, then one retry")
+                res = wiclient.score_image(payload, BUDGET)
+            item["scoring_s"] = round(time.time() - item["scoring_started"], 2)
+            if res.get("http") == 200:
+                item.update({"status": "done", "resolved": True, "result": res, "from_cache": False})
+                cache_put(item["pageid"], item.get("sha1"),
+                          {"result": res, "sent_px": item["sent_px"], "title": item["title"]},
+                          item.get("wiki", "commons.wikimedia.org"))
+                score_s += res.get("wall_s") or 0
+                a = res["answers"]
+                pub = wiclient.publish_p(a)
+                comp = wiclient.composite(a)
+                log(job, f"{item['title']} — P(infobox) {a['infobox_ready']['noul']:.3f}, "
+                         f"P(publish) {'n/a' if pub is None else format(pub, '.3f')}, "
+                         f"composite {'n/a' if comp is None else format(comp, '.3f')}, "
+                         f"quality {a['quality']['score']:.2f}, pose {a['pose']['choice']}, "
+                         f"{res['wall_s']}s")
+            else:
+                item.update({"status": "error",
+                             "error": f"{res.get('error')}: {str(res.get('detail', ''))[:120]}"})
+                log(job, f"{item['title']} — failed: {res.get('error')}")
+            _refresh_derived(job)          # this photo is readable now, not at the end of the run
+            _progress(job)
+            if idx < len(pending) - 1:
+                time.sleep(SPACING)          # no trailing pause: keeps the phase wall comparable
+        stop.set()
+        scoring_s = round(time.time() - t_pipe, 2)
+        job["pipeline"] = {"images": len(pending), "prefetch_depth": PREFETCH,
+                           "download_s": round(fetch_s, 2), "model_s": round(score_s, 2),
+                           "scoring_s": scoring_s,
+                           # what this phase would have cost doing it one image at a time
+                           "serial_estimate_s": round(fetch_s + score_s
+                                                      + SPACING * max(0, len(pending) - 1), 1),
+                           "saved_s": round(fetch_s + score_s + SPACING * max(0, len(pending) - 1)
+                                            - scoring_s, 2)}
+
+    # the per-photo numbers and the spread are recomputed every time a photo settles, so the list,
+    # the ranking and the spread panel are readable long before the last photo finishes.
+    _refresh_derived(job)
+
+    job["stats"] = reports.stats(job["items"])
+    job["latency"] = latency_summary(job)
+    if job["latency"].get("note"):
+        log(job, f"latency: {job['latency']['note']}")
+    job["elapsed_s"] = round(time.time() - t0, 2)
+    job["status"] = "done" if any(i["status"] == "done" for i in job["items"]) else "error"
+    log(job, f"finished in {job['elapsed_s']}s")
+
+
+# ------------------------------------------------------------------- about
+APP_VERSION = "0.4.1"
+MODEL_CARD = "https://huggingface.co/Cloudflare/clef-flash"
+WIKITECH_PAGE = "https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models"
+
+
+def about_payload() -> dict:
+    """Everything needed to audit one decision, assembled from the live constants.
+
+    The prompt, the legends and the limits are interpolated from `wiclient` rather than
+    retyped, so this panel cannot drift from what the app actually sends.
+    """
+    import html as _html
+
+    esc = _html.escape
+    q_items = []
+    for qid, spec in QUESTIONS.items():
+        lines = [f"<b>{esc(qid)}</b> — <code>{esc(spec['type'])}</code>"]
+        if spec.get("instructions"):
+            lines.append(f"<i>{esc(spec['instructions'])}</i>")
+        crit = spec.get("criteria")
+        if isinstance(crit, dict):
+            lines.append("<br>".join(f"<code>{esc(k)}</code> — {esc(v)}"
+                                     for k, v in crit.items()))
+        elif isinstance(crit, list):
+            lines.append("<br>".join(f"<code>{i}</code> — {esc(v)}"
+                                     for i, v in enumerate(crit)))
+        q_items.append({"id": qid, "type": spec["type"],
+                        "instructions": spec.get("instructions", ""),
+                        "criteria": crit, "html": "<br>".join(lines)})
+
+    template = {"model": "llm-clef-flash", "state": STATE, "questions": QUESTIONS,
+                "images": ["<base64 of the thumbnail, one image per request>"]}
+
+    sections = [
+        {"title": "What this app does",
+         "html": (
+           "<p>Paste Wikimedia Commons file references (bare names, <code>File:</code> titles, "
+           "page URLs, upload/thumbnail URLs, wikitext), and every photo is sent once to "
+           "<b>llm-clef-flash</b> — Cloudflare's decision model, served by the Wikimedia "
+           "Foundation on LiftWing — with one fixed six-question schema. The app then ranks the "
+           "photos by a <b>composite</b> it computes itself from three of the answers (face "
+           "visible, eyes to camera, pose), and shows the model's own P(publish) and P(infobox) "
+           "beside it.</p>"
+           "<p>Every answer comes from one request per photo. There is no text generation, no "
+           "second pass, no human review, and nothing is written to any wiki.</p>")},
+        {"title": "How a run works, step by step",
+         "html": ("<ol>"
+           "<li><b>Parse and normalise</b> each pasted line to a <code>File:</code> title. A line "
+           "that already reads as one file name is never split, so names containing commas survive "
+           "(<code>…(In die Sonne schauen, Cannes 2025).jpg</code>). A <code>#</code> truncates, "
+           "duplicates merge.</li>"
+           "<li><b>Work out which wiki owns it.</b> <code>upload.wikimedia.org/wikipedia/&lt;project&gt;/…"
+           "</code> and <code>&lt;lang&gt;.wikipedia.org/wiki/File:…</code> are resolved on that "
+           "wiki's API, not on Commons. Files on another wiki are labelled with their host.</li>"
+           "<li><b>Resolve the title</b> with the wiki's Action API "
+           "(<code>action=query&amp;prop=imageinfo&amp;iiprop=url|size|mime|sha1|extmetadata</code>): "
+           "page ID, dimensions, MIME type, SHA-1, licence, revision timestamp and a pre-rendered "
+           "thumbnail URL. Titles are batched <code>|</code>-separated; API normalisation and "
+           "redirects are mapped back to the string you pasted.</li>"
+           "<li><b>Cache check</b> on <code>pageid + SHA-1 + schema + width</code>. A cache hit "
+           "costs no API call; overwriting a file on Commons changes its SHA-1 and invalidates the "
+           "cached answer.</li>"
+           "<li><b>Download the thumbnail</b> server-side — 640&nbsp;px requested. The original file "
+           "is never fetched; Commons renders the size, and the model server downscales anything "
+           "wider to 640&nbsp;px before the vision encoder.</li>"
+           "<li><b>One decision call per photo</b>: the image inlined as base64 plus the schema "
+           "below. Downloads for the next photos already run in a background thread while the model "
+           "answers, and calls are spaced ~0.9&nbsp;s apart with a stop-on-429 policy (~100 "
+           "anonymous calls per hour; more from Toolforge/WMCS).</li>"
+           "<li><b>Record, cache, report.</b> Answers, token counts and timings (wall time, "
+           "time-to-first-byte) are stored per photo, then rendered as Markdown, JSON, CSV or PDF.</li>"
+           "</ol>")},
+        {"title": "The exact request sent to Clef",
+         "html": (f"<p><code>POST {esc(wiclient.LIFTWING)}</code><br>"
+                  f"User-Agent: <code>{esc(wiclient.UA)}</code></p>"
+                  "<p>The body is literally this, with the image base64 substituted:</p>"
+                  f"<pre>{esc(json.dumps(template, indent=2))}</pre>"
+                  "<p><code>state</code> is the standing context; <code>instructions</code> is the "
+                  "question; <code>criteria</code> defines the allowed answers. Nothing else is "
+                  "sent — no filename, no Commons metadata, no prompt engineering beyond these "
+                  "strings.</p>")},
+        {"title": "The six questions, verbatim",
+         "html": "<table><tr><th>question</th><th>type</th><th>instructions and allowed answers</th></tr>"
+                 + "".join(f"<tr><td><code>{esc(q['id'])}</code></td>"
+                           f"<td><code>{esc(q['type'])}</code></td><td>{q['html']}</td></tr>"
+                           for q in q_items)
+                 + "</table>"
+                 + "<p><b>The three headline numbers, and what each one is:</b></p><ul>"
+                 + ("<li><b>composite</b> — <i>not a model probability</i>. This is our own "
+                    "arithmetic: <code>min(face_visible, eyes_to_camera) × pose weight</code>, with "
+                    "head-and-shoulders 1.0, three-quarter 0.9, full body 0.6, candid 0.5, group "
+                    "0.25. It is the ranking key because the questions that ask about something "
+                    "<i>visible in the frame</i> separate photos well, while the editorial ones "
+                    "collapse toward the middle — measured on 57 photos: face_visible spread 0.372, "
+                    "eyes_to_camera 0.350, infobox_ready 0.229, quality 0.145 (sd). Every "
+                    "ingredient is shown on the card, so you can disagree with the weighting.</li>"
+                    "<li><b>publish_ready</b> — the model's own two-option answer: it picks "
+                    "<code>publish</code> (\u201cthis photograph is the one to use\u201d) or "
+                    "<code>pass</code>. We show P(publish). It was chosen because it spreads without "
+                    "saturating at the ceiling, unlike the rewrites tested on 2026-10-13.</li>"
+                    "<li><b>infobox_ready</b> — the model's own yes/no on the original wording "
+                    "(\u201cgood enough to be the lead image (infobox portrait) of a Wikipedia "
+                    "biography\u201d). Kept for continuity, shown but no longer the ranking key.</li>"
+                    "</ul>")},
+        {"title": "What each answer means",
+         "html": (
+           "<p>The model returns a probability for every allowed option, in one forward pass "
+           "(<code>usage.output_tokens</code> is always 0 — it generates no text):</p><ul>"
+           "<li><b>noul</b> (true/false) — a single number, the model's <i>probability that the "
+           "answer is true</i>. So <code>infobox_ready: 0.65</code> means \"65% likely to be good "
+           "enough as a biography lead image\" <i>on the wording above</i>. The app reads it that "
+           "way because the model card defines it that way.</li>"
+           "<li><b>choice</b> — the most likely option plus the full distribution; the app shows "
+           "the winner and its probability, and lists the rest.</li>"
+           "<li><b>score</b> — an <i>expected value</i> across the ordered legend plus the "
+           "distribution. <b>quality 2.23/4</b> is the mean of that distribution: 0 unusable, "
+           "1 poor, 2 acceptable, 3 good, 4 excellent.</li></ul>"
+           "<p><b>What \"quality\" means here, exactly:</b> only the five labels above. There is no "
+           "sharpness, resolution, lighting or composition rubric in the request, and the model "
+           "sees a 640&nbsp;px-wide thumbnail — so it is judging \"usable in an encyclopedia "
+           "article\" as described, not performing a technical image-quality measurement. Treat it "
+           "as a comparative signal between photos, not an absolute grade.</p>")},
+        {"title": "Candidate spread — the metric the run reports",
+         "html": (
+           "<p>\"Do the numbers separate anything?\" is answered by <b>candidate spread</b>, not by "
+           "standard deviation. sd rises whenever answers pile up at either end — including at the "
+           "ceiling, which is exactly what happened when we tried rewording the infobox question: "
+           "on the same four photos every rewrite emptied the 0.35–0.65 band by pushing all the "
+           "real portraits to 0.81–0.96, cutting the range between them from 0.486 to as little as "
+           "0.021.</p>"
+           "<p>So each run reports, per headline number:</p><ul>"
+           "<li><b>candidates</b> — how many photos score at or above the candidate floor "
+           f"(<code>{CANDIDATE_FLOOR}</code>, set by <code>CANDIDATE_FLOOR</code>);</li>"
+           "<li><b>candidate range</b> — the gap between the best and worst <i>candidate</i>, which "
+           "is the separation triage actually uses;</li>"
+           "<li><b>median gap</b> — the typical distance between neighbouring candidates (small "
+           "gaps mean near-ties);</li>"
+           "<li><b>dead zone</b> — how many answers sit in 0.35–0.65, where a number carries little "
+           "information either way.</li></ul>"
+           "<p>These are reported for the composite, for P(publish) and for P(infobox) side by "
+           "side, so you can see which number is doing the separating in your own run.</p>")},
+        {"title": "What it does not do",
+         "html": ("<ul>"
+           "<li>No identification, recognition or depiction of people — it never names anyone and "
+           "the app sends no names.</li>"
+           "<li>No notability, licence, copyright or consent check. Licence strings are shown from "
+           "Commons metadata for context only.</li>"
+           "<li>No threshold magic: \"≥ 0.5\" is a reporting convenience, not a tuned decision "
+           "boundary. In our samples nothing reached above ~0.71, so use the ranking, and calibrate "
+           "against labelled data before trusting any cut-off.</li>"
+           "<li>No on-wiki action of any kind. Nothing is uploaded, tagged, categorised or edited.</li>"
+           "<li>Answers are model estimates, not ground truth, and the platform is officially "
+           "\"experimental\" with no availability SLA.</li></ul>")},
+        {"title": "Where the bytes go",
+         "html": ("<ul><li>The browser only talks to this app. Commons API lookups, thumbnail "
+                  "downloads and the Clef call are all made by the server process, so the client IP "
+                  "the endpoint sees is this host's.</li>"
+                  "<li>The one exception: the thumbnails shown in the results list are hotlinked by "
+                  "your browser from <code>thumb.wikimedia.org</code>/<code>upload.wikimedia.org</code>."
+                  "</li>"
+                  "<li>The image bytes and the <code>state</code> string are sent to Wikimedia's "
+                  "LiftWing (<code>api.wikimedia.org</code>). Results are cached locally under "
+                  "<code>cache/</code>; job state lives in memory and disappears when the server "
+                  "restarts. No accounts, no analytics, no third parties.</li></ul>")},
+        {"title": "Provenance",
+         "html": (f"<ul><li>App version {esc(APP_VERSION)} · model "
+                  f"<code>llm-clef-flash</code> (clef-flash 9B, Apache-2.0, served by WMF on "
+                  f"HuggingFace transformers, 1&nbsp;GPU) · schema hash "
+                  f"<code>{esc(SCHEMA_HASH)}</code> · thumbnail width {THUMB_WIDTH}&nbsp;px · "
+                  f"call spacing {SPACING}&nbsp;s.</li>"
+                  f"<li>Latency baseline {BASELINE_WARM_S}&nbsp;s per call, measured on this "
+                  f"install (62 recorded calls, 2026-10-02 and 2026-10-12) — not a documented "
+                  f"figure.</li>"
+                  f"<li>Semantics quoted from the model card: <a href=\"{MODEL_CARD}\">"
+                  f"huggingface.co/Cloudflare/clef-flash</a>; the model list and platform caveats "
+                  f"from <a href=\"{WIKITECH_PAGE}\">Wikitech: LiftWing Large Language Models</a>."
+                  f"</li>"
+                  f"<li>Parsing and thumbnail rules follow the Wikipedia-AI-Skills "
+                  f"<code>commons-file-resolution</code> and <code>wikimedia-commons-thumbnails</code> "
+                  f"skills.</li></ul>")},
+    ]
+    return {"app_version": APP_VERSION, "title": "About WikiPortraits Eval",
+            "sections": sections,
+            "questions": q_items,
+            "request": {"endpoint": wiclient.LIFTWING, "model": "llm-clef-flash",
+                        "state": STATE, "user_agent": wiclient.UA,
+                        "body_template": template, "thumb_width": THUMB_WIDTH,
+                        "spacing_s": SPACING, "schema_hash": SCHEMA_HASH},
+            "sources": [MODEL_CARD, WIKITECH_PAGE]}
+
+
+# ------------------------------------------------------------------- routing
+def _read_static(fname):
+    full = os.path.join(STATIC, os.path.basename(fname))
+    if not os.path.exists(full):
+        return None
+    ctype = ("text/css" if fname.endswith(".css") else
+             "application/javascript" if fname.endswith(".js") else
+             "text/html; charset=utf-8" if fname.endswith(".html") else "application/octet-stream")
+    with open(full, "rb") as fh:
+        return ctype, fh.read()
+
+
+def route(method: str, path: str, body: bytes = b"") -> tuple:
+    """Return (status, content_type, payload_bytes, extra_headers)."""
+    def js(obj, code=200):
+        return code, "application/json", json.dumps(obj, ensure_ascii=False).encode(), {}
+
+    try:
+        if method == "GET":
+            if path in ("/", "/index.html"):
+                got = _read_static("index.html")
+                return 200, got[0], got[1], {} if got else (500, "text/plain", b"no ui", {})
+            if path.startswith("/static/"):
+                got = _read_static(path[len("/static/"):])
+                return (200, got[0], got[1], {}) if got else js({"error": "not found"}, 404)
+            if path == "/api/health":
+                return js({"ok": True, "uptime_s": round(time.time() - START, 1)})
+            if path == "/api/about":
+                return js(about_payload())
+            if path == "/api/config":
+                return js({"model": "llm-clef-flash", "endpoint": wiclient.LIFTWING,
+                           "thumb_width_requested": THUMB_WIDTH, "spacing_s": SPACING,
+                           "schema_hash": SCHEMA_HASH, "questions": QUESTIONS,
+                           "budget": BUDGET.status(), "cache_dir": CACHE_DIR,
+                           "cache_entries": len([f for f in os.listdir(CACHE_DIR) if f.endswith(".json")])})
+            if path.startswith("/api/job/"):
+                parts = path.strip("/").split("/")
+                job = JOBS.get(parts[2]) if len(parts) > 2 else None
+                if not job:
+                    return js({"error": "no such job"}, 404)
+                if len(parts) == 4 and parts[3].startswith("report."):
+                    return _report(job, parts[3].split(".")[1])
+                return js(dict(job) | {"budget": BUDGET.status(), "latency": latency_summary(job)})
+            return js({"error": "not found"}, 404)
+
+        if method == "POST":
+            data = json.loads(body.decode() or "{}") if body else {}
+            if path == "/api/parse":
+                parsed = wiclient.parse_entries(data.get("text", ""))
+                titles = [{"title": i["title"], "wiki": i.get("wiki")} for i in parsed["items"]]
+                meta = wiclient.resolve(titles) if titles else {}
+                def _m(e):
+                    return meta.get((e.get("wiki") or "commons.wikimedia.org", e["title"])) or {}
+                items = [{"raw": e["raw"], "title": e["title"], "wiki": e.get("wiki"),
+                          "ok": bool(_m(e).get("ok")),
+                          "pageid": _m(e).get("pageid"),
+                          "orig_w": _m(e).get("orig_w"),
+                          "orig_h": _m(e).get("orig_h"),
+                          "mime": _m(e).get("mime"),
+                          "license": _m(e).get("license"),
+                          "error": _m(e).get("error")}
+                         for e in parsed["items"]]
+                return js({"items": items, "warnings": parsed["warnings"], "n": len(items)})
+            if path == "/api/run":
+                active = [j for j in JOBS.values() if j["status"] in ("queued", "running")]
+                if len(active) >= MAX_PARALLEL_JOBS:
+                    return js({"error": "another run is already in progress"}, 409)
+                job = new_job(data.get("items") or data.get("text", ""))
+                if not job["items"]:
+                    return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
+                threading.Thread(target=run_job, args=(job,), daemon=True).start()
+                return js({"job_id": job["id"], "total": job["progress"]["total"]})
+            return js({"error": "not found"}, 404)
+        return js({"error": "method not allowed"}, 405)
+    except Exception:
+        traceback.print_exc()
+        return 500, "application/json", json.dumps({"error": "server error"}).encode(), {}
+
+
+def _report(job, fmt):
+    meta = {"state": STATE, "questions": QUESTIONS, "elapsed_s": job.get("elapsed_s"),
+            "latency": latency_summary(job), "spread": job.get("spread"),
+            "pdf_path": os.path.join(CACHE_DIR, f"report-{job['id']}.pdf")}
+    name = f'filename="wikiportraits-{job["id"]}.{fmt}"'
+    if fmt == "md":
+        return (200, "text/markdown; charset=utf-8", reports.build_md(job["items"], meta).encode(),
+                {"Content-Disposition": "attachment; " + name})
+    if fmt == "csv":
+        return (200, "text/csv; charset=utf-8", reports.build_csv(job["items"]).encode(),
+                {"Content-Disposition": "attachment; " + name})
+    if fmt == "json":
+        return (200, "application/json; charset=utf-8",
+                reports.build_json(job["items"], meta).encode(),
+                {"Content-Disposition": "attachment; " + name})
+    if fmt == "pdf":
+        return (200, "application/pdf", reports.build_pdf(job["items"], meta),
+                {"Content-Disposition": "attachment; " + name})
+    return 400, "application/json", json.dumps({"error": "unknown format"}).encode(), {}

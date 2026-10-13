@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WikiPortraits Eval — Commons photo triage</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#fff;--ink:#12233b;--muted:#5a6a7d;--line:#d9dfe7;--blue:#1f5fa8;
+        --green:#2f7d4f;--amber:#9a6206;--red:#a3312c;--bar:#e3e8ef}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{background:#12233b;color:#fff;padding:14px 20px;display:flex;flex-wrap:wrap;
+         gap:12px;align-items:baseline}
+  header h1{font-size:18px;margin:0;font-weight:650}
+  header .sub{color:#a9bad0;font-size:13px}
+  main{max-width:1080px;margin:0 auto;padding:18px 16px 60px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;
+        margin-bottom:16px}
+  h2{font-size:15px;margin:0 0 10px;font-weight:650}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+  textarea{width:100%;min-height:150px;padding:10px;border:1px solid var(--line);border-radius:8px;
+           font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical}
+  button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:#fff;
+         cursor:pointer}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .grow{flex:1}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);
+        background:#eef2f7;color:var(--muted)}
+  .bar{height:12px;background:var(--bar);border-radius:999px;overflow:hidden}
+  .bar > span{display:block;height:100%;background:var(--blue);width:0;transition:width .3s}
+  .meter{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .big{font-size:22px;font-weight:650}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  .stat{border:1px solid var(--line);border-radius:8px;padding:10px}
+  .stat .k{font-size:12px;color:var(--muted)}
+  .item{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px;
+        display:flex;gap:12px;align-items:flex-start}
+  .item .col{flex:1;min-width:0}
+  .item .thumb{flex:0 0 96px;width:96px;height:96px;object-fit:cover;border-radius:8px;
+               border:1px solid var(--line);background:#eef2f7;display:block}
+  .item .thumb.none{display:flex;align-items:center;justify-content:center;text-align:center;
+                    font-size:11px;color:var(--muted);padding:6px}
+  .item h3{margin:0 0 4px;font-size:14px;font-weight:600}
+  .item .meta{font-size:12px;color:var(--muted);margin-bottom:6px;word-break:break-all}
+  .q{display:grid;grid-template-columns:150px 1fr 62px;gap:8px;align-items:center;font-size:12.5px;
+     margin:2px 0}
+  .q .track{background:var(--bar);height:9px;border-radius:999px;overflow:hidden}
+  .q .fill{height:100%;background:var(--blue)}
+  .q .val{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+  .status{font-size:12px;padding:1px 7px;border-radius:999px;border:1px solid var(--line)}
+  .st-pending{background:#eef2f7;color:var(--muted)}
+  .st-downloading{background:#eef2f7;color:var(--blue)}
+  .st-ready{background:#f3f1ff;color:#4a3b8f}
+  .st-scoring{background:#fff6e5;color:var(--amber)}
+  .st-done{background:#eaf6ee;color:var(--green)}
+  .st-error,.st-notfound{background:#fdecec;color:var(--red)}
+  .log{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);
+       white-space:pre-wrap;max-height:180px;overflow:auto}
+  .help code{background:#eef2f7;padding:1px 5px;border-radius:4px;
+             font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .warn{color:var(--amber);font-size:13px}
+  .ok{color:var(--green);font-weight:600}
+  .clock{font-variant-numeric:tabular-nums}
+  .hidden{display:none}
+  .rank{color:var(--muted);font-weight:700;margin-right:7px}
+  #spread .sp{margin-top:2px}
+  #spread b.big{color:var(--ink)}
+  header button{background:#1d3355;border-color:#2b4468;color:#fff}
+  .overlay{position:fixed;inset:0;background:rgba(12,20,33,.55);display:flex;align-items:flex-start;
+           justify-content:center;padding:22px 14px;z-index:50;overflow:auto}
+  .overlay.hidden{display:none}
+  .modal{background:#fff;border-radius:12px;max-width:920px;width:100%;padding:18px 20px 28px;
+         box-shadow:0 18px 50px rgba(9,17,30,.35)}
+  .modal h3{font-size:14px;margin:20px 0 6px;color:var(--ink)}
+  .modal p,.modal li{font-size:13.5px;line-height:1.55}
+  .modal pre{background:#f5f7fa;border:1px solid var(--line);border-radius:8px;padding:10px;
+             overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .modal table{font-size:13px}
+  .modal code{background:#eef2f7;padding:1px 4px;border-radius:4px;
+              font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .modal a{color:var(--blue)}
+  .modal nav a{margin-right:12px;text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>WikiPortraits Eval</h1>
+  <span class="sub">Commons photos → llm-clef-flash on Wikimedia LiftWing · paste a list, get per-image probabilities and a downloadable report</span>
+  <span class="grow"></span>
+  <button id="about-open" title="What this app does, and exactly what it sends to Clef">About</button>
+</header>
+
+<div id="about-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="about-title">
+  <div class="modal">
+    <div class="row"><h2 id="about-title" style="margin:0">About WikiPortraits Eval</h2>
+      <span class="grow"></span>
+      <button id="about-close" title="Close">Close ✕</button></div>
+    <p class="meter" style="margin:8px 0 0">Everything below is generated from the code that actually runs:
+      the prompt is the live request object, not a retyped description.</p>
+    <nav id="about-toc" class="meter" style="margin:10px 0"></nav>
+    <div id="about-body"></div>
+  </div>
+</div>
+
+<main>
+  <div class="card">
+    <h2>1 · Paste your list of images</h2>
+    <label>One per line. Any of these forms work — mix them freely:</label>
+    <textarea id="input" spellcheck="false">Foo.jpg
+File:Foo.jpg
+https://commons.wikimedia.org/wiki/File:Foo.jpg
+https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</textarea>
+    <div class="row" style="margin-top:10px">
+      <button id="check" class="primary">Check inputs</button>
+      <button id="run" disabled>Score them</button>
+      <span id="parseinfo" class="pill">nothing checked yet</span>
+      <span class="grow"></span>
+      <span id="budget" class="meter">budget: —</span>
+    </div>
+    <div id="warnings" class="warn" style="margin-top:8px"></div>
+    <div id="parsed" class="hidden" style="margin-top:10px">
+      <table><thead><tr><th>#</th><th>Input</th><th>Resolved to</th><th>Size</th><th>Licence</th></tr></thead>
+      <tbody id="parsedbody"></tbody></table>
+    </div>
+  </div>
+
+  <div class="card help">
+    <h2>Accepted formats</h2>
+    <p style="margin:0 0 8px"><code>Foo.jpg</code> · <code>File:Foo.jpg</code> ·
+      <code>commons.wikimedia.org/wiki/File:Foo.jpg</code> ·
+      <code>https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</code> ·
+      <code>…/thumb/0/06/Foo.jpg/640px-Foo.jpg</code> ·
+      <code>Special:FilePath/Foo.jpg</code> ·
+      <code>…/w/index.php?title=File:Foo.jpg</code> ·
+      <code>[[File:Foo.jpg|thumb|caption]]</code></p>
+    <p class="meter" style="margin:0">Case, underscores, <code>%20</code> encoding, bullets/numbering and
+      quotes are all tolerated; duplicates are merged. A comma or semicolon only separates two entries
+      when another entry follows it (a <code>File:</code> prefix, a URL, <code>[[</code>), so file names
+      that contain a comma — <code>…(In die Sonne schauen, Cannes 2025).jpg</code> — stay intact, and
+      <code>Foo.jpg, Bar.jpg</code> still splits.
+      Non-photo media (SVG, PDF, video keyframes) resolve too — Commons renders a raster thumbnail.
+      Category listings are <em>not</em> supported yet (paste the file names instead).
+      For the exact request sent to Clef and what every answer means, press
+      <b>About</b> (top right) — including the verbatim prompt and the quality legend.</p>
+  </div>
+
+  <div class="card" id="progresscard">
+    <div class="row"><h2 style="margin:0">2 · Progress</h2>
+      <span class="grow"></span>
+      <span id="jobstate" class="pill">idle</span></div>
+    <div class="bar" style="margin:10px 0 6px"><span id="bar"></span></div>
+    <div class="row"><span id="counts" class="meter">0 / 0</span><span class="grow"></span>
+      <span id="timing" class="meter"></span></div>
+    <div id="latency" class="meter" style="margin-top:6px"></div>
+    <div id="spread" class="meter" style="margin-top:6px"></div>
+    <div id="stats" class="grid" style="margin-top:14px"></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><h2 style="margin:0">3 · Results</h2><span class="grow"></span>
+      <button id="dl-md" disabled>Markdown</button>
+      <button id="dl-json" disabled>JSON</button>
+      <button id="dl-csv" disabled>CSV</button>
+      <button id="dl-pdf" disabled>PDF</button>
+    </div>
+    <div id="items" style="margin-top:12px"></div>
+    <details style="margin-top:10px"><summary class="meter">Run log</summary>
+      <div id="log" class="log"></div></details>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let jobId = null, timer = null, lastJob = null, lastLatency = null;
+let aboutCache = null;
+
+const fmt = (v, n = 3) => (v === null || v === undefined) ? "—" : Number(v).toFixed(n);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function bar(label, p, note) {
+  const pct = Math.max(0, Math.min(1, p ?? 0)) * 100;
+  return `<div class="q"><div>${esc(label)}</div><div class="track"><div class="fill"
+    style="width:${pct.toFixed(1)}%"></div></div><div class="val">${fmt(p)}</div></div>`;
+}
+
+// P(publish) out of the two-option choice answer: the option whose id starts with "publish".
+function pubProbs(q) {
+  const p = q.probabilities || {};
+  for (const [k, v] of Object.entries(p)) if (k.toLowerCase().startsWith("publish")) return v;
+  return q.confidence ?? null;
+}
+
+// rank key for ordering the list: the composite, falling back to the model's own P(infobox).
+function rankOf(it) {
+  if (it.composite != null) return it.composite;
+  const ib = it.result?.answers?.infobox_ready?.noul;
+  return ib == null ? -1 : ib;
+}
+
+// ---- statuses. `downloading` means bytes are in flight; `ready` means the image is already
+// here and waiting for its turn at the model, which can be minutes when the endpoint is slow.
+const STATUS_LABEL = {pending: "queued", downloading: "downloading thumbnail",
+                      ready: "ready · queued for the model", scoring: "scoring",
+                      done: "done", error: "error", notfound: "not found"};
+
+function renderBody(it) {
+  const r = it.result || {}, a = r.answers || {};
+  if (it.status === "done" && a.infobox_ready) {
+    const poseTop = Object.entries(a.pose.probabilities).sort((x, y) => y[1] - x[1]);
+    const qual = Object.entries(a.quality.probabilities).sort((x, y) => Number(x[0]) - Number(y[0]));
+    const pub = a.publish_ready || {};
+    const pubP = pubProbs(pub);
+    const comp = it.composite;
+    return `
+      ${comp != null ? `<div class="q"><div><b>composite → ${fmt(comp)}</b> <span class="meter">(our arithmetic: min(face, eyes) × pose weight — not a model probability)</span></div>
+        <div class="track"><div class="fill" style="width:${(comp * 100).toFixed(1)}%"></div></div>
+        <div class="val">${fmt(comp)}</div></div>` : ""}
+      ${pub.choice ? bar(`publish → <b>${esc(pub.choice)}</b> (model's own choice)`, pubP) : ""}
+      ${bar("infobox ready (P true)", a.infobox_ready.noul)}
+      ${bar("face visible (P true)", a.face_visible.noul)}
+      ${bar("eyes → camera (P true)", a.eyes_to_camera.noul)}
+      <div class="q"><div>pose → <b>${esc(a.pose.choice)}</b></div>
+        <div class="track"><div class="fill" style="width:${(a.pose.probabilities[a.pose.choice] * 100).toFixed(1)}%"></div></div>
+        <div class="val">${fmt(a.pose.probabilities[a.pose.choice])}</div></div>
+      <div class="q"><div>quality → <b>${fmt(a.quality.score, 2)}</b>/4</div>
+        <div class="track"><div class="fill" style="width:${(a.quality.score / 4 * 100).toFixed(1)}%"></div></div>
+        <div class="val">${fmt(a.quality.confidence)}</div></div>
+      <div class="meta" style="margin-top:6px">pose mix: ${poseTop.map(([k, v]) => `${esc(k)} ${fmt(v)}`).join(" · ")}
+        | quality mix: ${qual.map(([k, v]) => `${k}:${fmt(v, 2)}`).join(" ")}
+        | ${r.usage?.input_tokens ?? "?"} input tokens | model took ${r.wall_s}s${it.from_cache ? " | cached" : ""}</div>`;
+  }
+  if (it.status === "error" || it.status === "notfound") {
+    return `<div class="meta">${esc(it.error || "failed")}</div>`;
+  }
+  if (it.status === "scoring") {
+    const seen = it.scoring_s ?? (it.scoring_started ? (Date.now() / 1000 - it.scoring_started) : null);
+    return `<div class="meta">waiting for the model — <b class="clock"
+      data-start="${it.scoring_started || 0}">${fmt(seen, 1)}s</b>
+      (this run's median call: ${fmt(lastLatency?.median_s, 1)}s, warm baseline ${fmt(lastLatency?.baseline_s, 1)}s)</div>`;
+  }
+  if (it.status === "downloading") return `<div class="meta">downloading the thumbnail…</div>`;
+  if (it.status === "ready") return `<div class="meta">image ready — waiting for its turn at the model</div>`;
+  return `<div class="meta">queued</div>`;
+}
+
+const rows = new Map();      // key -> {el, ttl, status, meta, body, sig}
+const clockStarts = new Map();
+
+function rowFor(it, i) {
+  const key = `${it.pageid || it.title || it.raw || "item"}#${i}`;
+  let row = rows.get(key);
+  if (row) return {key, row};
+  const el = document.createElement("div");
+  el.className = "item";
+  // built once: the <img> below is never re-created, which is what stopped the list flashing
+  el.innerHTML = `<a class="thumblink" target="_blank" rel="noopener"><img class="thumb"
+      loading="lazy" decoding="async" alt=""></a>
+    <div class="col"><h3><span class="rank"></span><span class="ttl"></span> <span class="status"></span></h3>
+      <div class="meta"></div><div class="qbody"></div></div>`;
+  row = {el, rank: el.querySelector(".rank"), ttl: el.querySelector(".ttl"),
+         status: el.querySelector(".status"),
+         meta: el.querySelector(".meta"), body: el.querySelector(".qbody"),
+         link: el.querySelector(".thumblink"), img: el.querySelector("img.thumb"), sig: null};
+  rows.set(key, row);
+  return {key, row};
+}
+
+function renderItem(it, i, rank) {
+  const {key, row} = rowFor(it, i);
+  const title = it.title || it.raw || "";
+  if (row.ttl.textContent !== title) row.ttl.textContent = title;
+  const rankTxt = rank ? `#${rank} ` : "";
+  if (row.rank.textContent !== rankTxt) row.rank.textContent = rankTxt;
+  row.status.textContent = STATUS_LABEL[it.status] || it.status || "pending";
+  row.status.className = "status st-" + (it.status || "pending");
+  const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
+  if (it.thumburl) {
+    if (row.img.getAttribute("src") !== it.thumburl) {      // set once, never re-created
+      row.img.setAttribute("src", it.thumburl);
+      row.img.setAttribute("alt", title || "thumbnail");
+    }
+    if (row.link.getAttribute("href") !== (commons || it.thumburl)) {
+      row.link.setAttribute("href", commons || it.thumburl);
+    }
+    row.link.style.display = "";
+  } else {
+    row.link.style.display = "none";
+  }
+  const meta = `${it.sent_px ? `sent ${esc(it.sent_px)}` : ""}`
+    + `${it.orig_w ? ` · original ${it.orig_w}×${it.orig_h}` : ""}`
+    + `${it.pageid ? ` · <a href="${commons}" target="_blank" rel="noopener">Commons page</a>` : ""}`
+    + `${it.license ? ` · ${esc(it.license)}` : ""}`
+    + `${it.fetch_s ? ` · thumbnail in ${it.fetch_s}s` : ""}`;
+  if (row.meta.innerHTML !== meta) row.meta.innerHTML = meta;
+  const sig = `${it.status}|${it.from_cache ? "c" : ""}|${it.error || ""}|${it.result ? "r" : ""}`;
+  if (row.sig !== sig) {                       // body rebuilt only when the state actually changes
+    row.sig = sig;
+    row.body.innerHTML = renderBody(it);
+  } else if (it.status === "scoring") {        // …but the clock keeps ticking
+    const c = row.body.querySelector(".clock");
+    if (c) {
+      const seen = it.scoring_s ?? (it.scoring_started ? (Date.now() / 1000 - it.scoring_started) : 0);
+      const txt = `${fmt(seen, 1)}s`;
+      if (c.textContent !== txt) c.textContent = txt;
+    }
+  }
+  return key;
+}
+
+// the metric the run reports: separation among candidates, not standard deviation
+function renderSpread(sp) {
+  const el = $("spread");
+  if (!el) return;
+  if (!sp || !sp.composite || !sp.composite.n) { el.innerHTML = ""; return; }
+  const one = (name, s) => (s && s.n)
+    ? `<div class="sp"><b>${esc(name)}</b> — ${s.n_candidates}/${s.n} candidates at or above ${s.floor}
+       · range <b>${fmt(s.candidate_range)}</b> · median gap ${fmt(s.candidate_median_gap)}
+       · ${s.dead_zone}/${s.n} (${Math.round((s.dead_zone_share || 0) * 100)}%) in the 0.35–0.65 band
+       ${s.top && s.top.length ? ` · leading: ${s.top.map(esc).join(" › ")}` : ""}</div>`
+    : "";
+  el.innerHTML = `<b class="big">candidate spread</b> — separation among candidates, not sd:
+    <span class="meter">candidate = score at or above the floor</span>`
+    + one("composite", sp.composite) + one("P(publish)", sp.publish_ready)
+    + one("P(infobox)", sp.infobox_ready);
+}
+
+function renderStats(s) {
+  if (!s || !s.n_scored) return "";
+  const cell = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="big">${v}</div></div>`;
+  return cell("scored", `${s.n_scored}/${s.n_input}`)
+    + cell("mean composite", fmt(s.composite_mean))
+    + cell("mean P(publish)", fmt(s.p_publish_mean))
+    + cell("mean P(infobox)", fmt(s.p_infobox_mean))
+    + cell("median P(infobox)", fmt(s.p_infobox_median))
+    + cell("max P(infobox)", fmt(s.p_infobox_max))
+    + cell("≥ 0.5 infobox-ready", s.n_above_half)
+    + cell("mean quality /4", fmt(s.quality_mean, 2))
+    + cell("input tokens", s.tokens_total)
+    + cell("median wall", `${fmt(s.wall_median_s, 2)}s`);
+}
+
+function renderJob(job) {
+  lastJob = job;
+  const p = job.progress || { done: 0, total: 0 };
+  const pct = p.total ? (100 * p.done / p.total) : 0;
+  $("bar").style.width = pct.toFixed(1) + "%";
+  $("counts").textContent = `${p.done} / ${p.total} images`;
+  $("jobstate").textContent = job.status + (job.status === "running" ? "…" : "");
+  const e = job.elapsed_s ?? (job.created ? (Date.now() / 1000 - job.created) : 0);
+  const pl = job.pipeline;
+  $("timing").textContent = `elapsed ${Number(e).toFixed(1)}s`
+    + (pl ? ` · downloads ${pl.download_s}s + model ${pl.model_s}s (serial est. ${pl.serial_estimate_s}s, `
+            + `${pl.prefetch_depth} buffered)` : "");
+  $("stats").innerHTML = renderStats(job.stats);
+  lastLatency = job.latency || lastLatency;
+  const L = job.latency;
+  const doneItems = (job.items || []).filter(i => i.status === "done");
+  const allCached = doneItems.length > 0 && doneItems.every(i => i.from_cache);
+  if (L && L.calls) {
+    const lit = (s) => `<b>${fmt(s, 2)}s</b>`;
+    $("latency").innerHTML = `<span class="${L.verdict === "normal" ? "ok" : "warn"}">endpoint ${L.verdict}</span>`
+      + ` · median ${lit(L.median_s)} per model call (n=${L.calls}, ${fmt(L.min_s, 2)}–${fmt(L.max_s, 2)}s)`
+      + `, time to first byte ${lit(L.median_ttfb_s)} · measured warm baseline ${lit(L.baseline_s)} — ${L.factor}x`
+      + (allCached ? ` · from cached results, measured earlier` : "")
+      + (L.verdict === "normal" ? "" : `<br>${esc(L.note || "")}`);
+  }
+  // incremental list: rows are created once and patched in place, so the thumbnails never reload.
+  // Done photos are ordered by the composite (rank shown), anything still running keeps its place
+  // below them.
+  const order = (job.items || []).slice().sort((a, b) => {
+    const ad = a.status === "done", bd = b.status === "done";
+    if (ad !== bd) return ad ? -1 : 1;
+    return ad ? rankOf(b) - rankOf(a) : 0;
+  });
+  const itemsEl = $("items");
+  const seen = new Set();
+  let rank = 0;
+  order.forEach((it, i) => {
+    if (it.status === "done") rank += 1;
+    const key = renderItem(it, i, it.status === "done" ? rank : 0);
+    seen.add(key);
+    const row = rows.get(key);
+    if (row && itemsEl.children[i] !== row.el) itemsEl.insertBefore(row.el, itemsEl.children[i] || null);
+  });
+  for (const [key, row] of rows) {
+    if (!seen.has(key)) { row.el.remove(); rows.delete(key); }
+  }
+  renderSpread(job.spread);
+  const logTxt = (job.log || []).join("\n");
+  if ($("log").textContent !== logTxt) $("log").textContent = logTxt;
+  if (job.budget) {
+    const b = job.budget;
+    $("budget").textContent = b.blocked_for_s > 0
+      ? `rate limited — ${Math.ceil(b.blocked_for_s)}s cooldown (budget ${b.used_last_hour}/${b.limit_per_hour} this hour)`
+      : `budget: ${b.used_last_hour}/${b.limit_per_hour} calls this hour`;
+  }
+  const any = (job.items || []).some(i => i.status === "done");
+  ["dl-md", "dl-json", "dl-csv", "dl-pdf"].forEach(id => $(id).disabled = !any);
+  if (job.status === "done" || job.status === "error") {
+    clearInterval(timer); timer = null;
+    $("run").disabled = false; $("check").disabled = false;
+  }
+}
+
+async function poll() {
+  if (!jobId) return;
+  const r = await fetch(`/api/job/${jobId}`);
+  if (r.ok) renderJob(await r.json());
+}
+
+// local ticker: keeps the per-row "waiting for the model" clocks moving between polls,
+// without touching any other node (so nothing repaints or reloads)
+setInterval(() => {
+  document.querySelectorAll("#items .clock").forEach(c => {
+    const start = Number(c.dataset.start || 0);
+    if (start) {
+      const txt = (Date.now() / 1000 - start).toFixed(1) + "s";
+      if (c.textContent !== txt) c.textContent = txt;
+    }
+  });
+}, 500);
+
+// ---- About: the prompt, the legends and the limits, fetched from the app so the page
+// cannot drift from what the scorer actually sends.
+async function showAbout() {
+  $("about-overlay").classList.remove("hidden");
+  if (aboutCache) return;
+  $("about-body").innerHTML = `<p class="meter">loading…</p>`;
+  try {
+    const r = await fetch("/api/about");
+    aboutCache = await r.json();
+  } catch (e) {
+    $("about-body").innerHTML = `<p class="warn">could not load /api/about — ${esc(e)}</p>`;
+    return;
+  }
+  const secs = aboutCache.sections || [];
+  $("about-title").textContent = aboutCache.title || "About";
+  $("about-toc").innerHTML = secs.map((s, i) =>
+    `<a href="#about-s${i}">${i + 1}. ${esc(s.title)}</a>`).join("");
+  $("about-body").innerHTML = secs.map((s, i) =>
+      `<h3 id="about-s${i}">${i + 1}. ${esc(s.title)}</h3>${s.html}`).join("")
+    + `<p class="meter">app version ${esc(aboutCache.app_version || "?")} — the prompt above is
+       generated from the same constants the scorer uses, so it cannot silently drift.</p>`;
+}
+function hideAbout() { $("about-overlay").classList.add("hidden"); }
+$("about-open").onclick = showAbout;
+$("about-close").onclick = hideAbout;
+$("about-overlay").addEventListener("click", (e) => { if (e.target === $("about-overlay")) hideAbout(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideAbout(); });
+
+$("check").onclick = async () => {
+  $("check").disabled = true;
+  $("parseinfo").textContent = "checking…";
+  try {
+    const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: $("input").value }) });
+    const d = await r.json();
+    $("parsedbody").innerHTML = (d.items || []).map((it, i) => `<tr>
+      <td>${i + 1}</td><td>${esc(it.raw)}</td>
+      <td>${it.ok ? esc(it.title) + (it.pageid ? ` <a href="https://commons.wikimedia.org/?curid=${it.pageid}" target="_blank" rel="noopener">↗</a>` : "") : `<span class="warn">${esc(it.error || "not found")}</span>`}</td>
+      <td>${it.orig_w ? it.orig_w + "×" + it.orig_h : "—"}</td><td>${esc(it.license || "—")}</td></tr>`).join("");
+    $("parsed").classList.remove("hidden");
+    const ok = (d.items || []).filter(i => i.ok).length;
+    $("parseinfo").textContent = `${ok} of ${(d.items || []).length} resolved`;
+    $("warnings").innerHTML = (d.warnings || []).map(w => `skipped “${esc(w.raw)}” — ${esc(w.reason)}`).join("<br>");
+    $("run").disabled = ok === 0;
+  } finally { $("check").disabled = false; }
+};
+
+$("run").onclick = async () => {
+  $("run").disabled = true; $("check").disabled = true;
+  const r = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: $("input").value }) });
+  const d = await r.json();
+  if (!r.ok) { $("jobstate").textContent = d.error || "could not start"; $("run").disabled = false; $("check").disabled = false; return; }
+  jobId = d.job_id;
+  for (const [, row] of rows) row.el.remove();
+  rows.clear();
+  lastLatency = null;
+  $("latency").innerHTML = "";
+  clearInterval(timer); timer = setInterval(poll, 1000); poll();
+};
+
+["md", "json", "csv", "pdf"].forEach(f => {
+  $("dl-" + f).onclick = () => { if (jobId) window.location = `/api/job/${jobId}/report.${f}`; };
+});
+
+fetch("/api/config").then(r => r.json()).then(c => {
+  $("budget").textContent = `budget: ${c.budget.used_last_hour}/${c.budget.limit_per_hour} calls this hour · `
+    + `${c.cache_entries} cached results · pacing ${c.spacing_s}s`;
+}).catch(() => {});
+</script>
+</body>
+</html>

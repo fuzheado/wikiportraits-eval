@@ -1,0 +1,12 @@
+# dev/runtime artifacts — never deploy or commit
+cache/
+serve/
+node_modules/
+.venv-pdf/
+__pycache__/
+*.pyc
+static/_index_extracted.js
+*.tar.gz
+*.log
+server.log
+.DS_Store

@@ -1,0 +1,2 @@
+# No runtime dependencies: the app is stdlib-only (urllib, http.server, reportlab-free PDF writer).
+# gunicorn is only needed if you wrap the WSGI shim on the traditional backend.

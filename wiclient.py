@@ -1,0 +1,497 @@
+"""Wikimedia Commons input parsing + LiftWing llm-clef-flash client.
+
+Stdlib only (urllib): the Toolforge build needs no pip install.
+"""
+import base64, hashlib, json, os, re, statistics, threading, time
+import urllib.error, urllib.parse, urllib.request
+
+UA = os.environ.get(
+    "WIKIMEDIA_USER_AGENT",
+    "WikiPortraitsEval/0.4 (https://meta.wikimedia.org/wiki/WikiPortraits) HermesAgent/1.0")
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+LIFTWING = ("https://api.wikimedia.org/service/lw/inference/v1/models/"
+            "llm-clef-flash:predict")
+THUMB_WIDTH = int(os.environ.get("THUMB_WIDTH", "640"))   # server downscales to 640 anyway
+SPACING = float(os.environ.get("SPACING", "0.9"))          # seconds between scoring calls
+
+STATE = ("WikiPortraits photograph of a public figure, taken by a volunteer photographer at an "
+         "event photo booth. Assess the photograph itself, not the person's fame.")
+
+QUESTIONS = {
+    "face_visible": {"type": "noul",
+                     "instructions": "Is at least one person's face clearly visible and unobstructed?"},
+    "pose": {"type": "choice",
+             "instructions": "What is the subject's pose and framing?",
+             "criteria": {
+                 "head_shoulders": "Head and shoulders, subject facing the camera",
+                 "three_quarter": "Roughly three-quarter body visible",
+                 "full_body": "Full body visible, head to feet",
+                 "group": "Two or more people in frame",
+                 "candid": "Not posing: candid, action or back-of-head shot",
+             }},
+    "quality": {"type": "score",
+                "instructions": "Overall photographic quality for use in an encyclopedia article",
+                "criteria": ["unusable (blurred/miscropped)", "poor", "acceptable", "good", "excellent"]},
+    "infobox_ready": {"type": "noul",
+                      "instructions": "Good enough to be the lead image (infobox portrait) of a Wikipedia biography?"},
+    "publish_ready": {"type": "choice",
+                      "instructions": "An editor needs one photograph of this person.",
+                      "criteria": {
+                          "publish": "This photograph is the one to use.",
+                          "pass": "Choose a different photograph instead.",
+                      }},
+    "eyes_to_camera": {"type": "noul",
+                       "instructions": "Are the eyes open and looking toward the camera?"},
+}
+SCHEMA_HASH = hashlib.sha1(json.dumps({"state": STATE, "questions": QUESTIONS},
+                                      sort_keys=True).encode()).hexdigest()[:12]
+MISSING = object()
+
+# The composite: our arithmetic on three model answers, not a model probability. It exists because
+# the visible-fact questions spread across the corpus (face_visible sd 0.372, eyes_to_camera 0.350)
+# while the editorial one collapses toward the middle (infobox_ready sd 0.229) — see
+# research/wording-experiment-2026-10-13.md. Reported separately from P(publish) and P(infobox).
+POSE_WEIGHT = {"head_shoulders": 1.0, "three_quarter": 0.9, "full_body": 0.6, "candid": 0.5,
+               "group": 0.25}
+CANDIDATE_FLOOR = float(os.environ.get("CANDIDATE_FLOOR", "0.25"))
+
+
+def publish_p(ans: dict):
+    """P(publish) from the two-option `choice` question."""
+    q = ans.get("publish_ready") or {}
+    probs = q.get("probabilities") or {}
+    if probs:
+        for k, v in probs.items():
+            if str(k).lower().startswith("publish"):
+                return v
+    if q.get("choice") and q.get("confidence") is not None and \
+            str(q["choice"]).lower().startswith("publish"):
+        return q["confidence"]
+    return None
+
+
+def composite(ans: dict):
+    """min(face_visible, eyes_to_camera) x pose weight — a ranking number we compute ourselves."""
+    face = (ans.get("face_visible") or {}).get("noul")
+    eyes = (ans.get("eyes_to_camera") or {}).get("noul")
+    pose = (ans.get("pose") or {}).get("choice")
+    if face is None or eyes is None:
+        return None
+    return round(min(face, eyes) * POSE_WEIGHT.get(pose, 0.5), 4)
+
+
+def candidate_spread(rows: list, floor: float = None) -> dict:
+    """Measure the spread that triage actually consumes.
+
+    `rows` is a list of (label, value). Global sd rises whenever answers pile up at either end,
+    so we report instead: the range among *candidates* (values at or above `floor`), the median
+    gap between adjacent candidates, and how many answers sit in the uninformative 0.35-0.65 band.
+    """
+    floor = CANDIDATE_FLOOR if floor is None else floor
+    vals = [(lab, v) for lab, v in rows if v is not None]
+    if not vals:
+        return {"n": 0}
+    vals.sort(key=lambda kv: -kv[1])
+    numbers = [v for _, v in vals]
+    cands = [v for v in numbers if v >= floor]
+    gaps = [round(cands[i] - cands[i + 1], 4) for i in range(len(cands) - 1)]
+    dead = [v for v in numbers if 0.35 <= v <= 0.65]
+    med = statistics.median(gaps) if gaps else None
+    return {
+        "n": len(numbers),
+        "floor": floor,
+        "n_candidates": len(cands),
+        "range_all": round(max(numbers) - min(numbers), 4),
+        "candidate_range": round(max(cands) - min(cands), 4) if len(cands) > 1 else None,
+        "candidate_median_gap": round(med, 4) if med is not None else None,
+        "dead_zone": len(dead),
+        "dead_zone_share": round(len(dead) / len(numbers), 3),
+        "top": [lab for lab, _ in vals[:3]],
+    }
+
+
+class Budget:
+    """Track calls in the rolling hour and remember a 429 Retry-After."""
+
+    def __init__(self, limit: int = 100):
+        self.limit = limit
+        self.calls = []                        # timestamps of scored calls
+        self.blocked_until = 0.0
+        self.last_429 = None
+        self.lock = threading.Lock()
+
+    def note_call(self):
+        with self.lock:
+            self.calls.append(time.time())
+
+    def note_429(self, retry_after):
+        with self.lock:
+            self.blocked_until = time.time() + float(retry_after or 60)
+            self.last_429 = {"at": time.time(), "retry_after": retry_after}
+
+    def used(self):
+        cutoff = time.time() - 3600
+        with self.lock:
+            self.calls = [t for t in self.calls if t > cutoff]
+            return len(self.calls)
+
+    def wait_seconds(self):
+        return max(0.0, self.blocked_until - time.time())
+
+    def status(self):
+        return {"used_last_hour": self.used(), "limit_per_hour": self.limit,
+                "blocked_for_s": round(self.wait_seconds(), 1), "last_429": self.last_429}
+
+
+# --------------------------------------------------------------------- inputs
+_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".svg", ".pdf",
+              ".djvu", ".xcf", ".webm", ".ogv", ".mp4", ".mp3", ".ogg", ".flac", ".wav", ".stl")
+_STRIP_PREFIX = re.compile(r"^\s*(?:[-*\u2022]|\d+[.)])\s*")
+_WIKITEXT = re.compile(r"\[\[\s*(?:File|Image)\s*:", re.I)
+_THUMB_PREFIX = re.compile(r"^\d+px-")
+# A comma/semicolon separates entries only when a new entry clearly starts after it.
+_SEP_WITH_PREFIX = re.compile(r"[,;]\s*(?=(?:File|Image|\[\[|https?://|//|Special:))", re.I)
+
+
+def _prep(s: str) -> str:
+    """Strip list markers/quotes and unwrap a wikitext embed down to its title."""
+    s = _STRIP_PREFIX.sub("", s or "").strip().strip('"\'')
+    if s.startswith("[["):
+        s = _WIKITEXT.sub("File:", s.lstrip("[").rstrip("]"))
+        s = s.split("|")[0].strip()
+    return s
+
+
+def _split_units(text: str):
+    """Yield candidate entries, one per line, honouring commas inside file names."""
+    for raw_line in re.split(r"[\n\r]+", text or ""):
+        line = _prep(raw_line)
+        if not line:
+            continue
+        prefixed = _SEP_WITH_PREFIX.split(line)
+        if len(prefixed) > 1:                  # "File:A.jpg, File:B.jpg" / "url, url"
+            for p in prefixed:
+                p = _prep(p)
+                if p:
+                    yield p
+            continue
+        pieces = [p.strip() for p in re.split(r"[,;]+", line) if p.strip()]
+        if len(pieces) > 1 and all(os.path.splitext(p)[1].lower() in _IMAGE_EXT for p in pieces):
+            for p in pieces:                   # "Foo.jpg, Bar.jpg" — every piece is a file
+                yield _prep(p)
+            continue
+        # one entry, commas and all: "…(In die Sonne schauen, Cannes 2025).jpg"
+        yield line
+
+
+def _wiki_for(raw: str) -> str:
+    """Which wiki's API can resolve this reference. Defaults to Commons.
+
+    Mirrors `commons-file-resolution` SOP 5 (files can live on other wikis) and the
+    upload.wikimedia.org path convention: /wikipedia/<project>/… names the project.
+    """
+    low = raw.lower()
+    if not (re.match(r"^(https?:)?//", low) or re.match(r"^[\w.-]+\.(?:org|com|net|io)/", low)):
+        return "commons.wikimedia.org"
+    url = raw if low.startswith("http") else ("https:" + raw if raw.startswith("//") else "https://" + raw)
+    u = urllib.parse.urlsplit(url)
+    host, path = u.netloc.lower(), urllib.parse.unquote(u.path)
+    if host.startswith(("upload.", "thumb.")):
+        return _project_from_upload_path(path)
+    if host.startswith("commons.m."):
+        return "commons.wikimedia.org"
+    if host in ("commons.wikimedia.org", "commons.wikimedia.beta.wmcloud.org"):
+        return "commons.wikimedia.org"
+    if host.endswith((".wikipedia.org", ".wikimedia.org", ".wikisource.org", ".wiktionary.org",
+                      ".wikibooks.org", ".wikinews.org", ".wikiversity.org", ".wikivoyage.org",
+                      ".wikiquote.org")):
+        return host
+    return "commons.wikimedia.org"
+
+
+# Characters that cannot appear in a MediaWiki title. `|` is the Action API's own title
+# separator, `#` starts a fragment; the rest are hard-rejected by the uploader (pattypan
+# skill, "Filename validation rules": `# < > [ ] | { }`).
+_TITLE_ILLEGAL = "#<>[]|{}"
+
+
+def parse_entries(text: str) -> dict:
+    """Split pasted input into candidate entries and classify each one.
+
+    Accepted (case-insensitive, %-encoding tolerated, underscores = spaces):
+        Foo.jpg                                     bare filename
+        File:Foo.jpg                                wikitext title
+        [[File:Foo.jpg|thumb|Caption]]              embedded wikitext
+        https://commons.wikimedia.org/wiki/File:Foo.jpg
+        https://commons.wikimedia.org/w/index.php?title=File:Foo.jpg
+        https://commons.wikimedia.org/wiki/Special:FilePath/Foo.jpg
+        https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg
+        https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/Foo.jpg/640px-Foo.jpg
+        https://thumb.wikimedia.org/wikipedia/commons/thumb/0/06/Foo.jpg/960px-Foo.jpg
+        Special:FilePath/Foo.jpg                    (with or without a host)
+
+    Commas and semicolons inside a file name are preserved — a separator only splits
+    the line when what follows looks like the start of another entry (File:, Image:,
+    [[, http(s)://, //, Special:) — and a line that already parses as one entry is
+    never split.
+    """
+    items, warnings = [], []
+    for raw in _split_units(text):
+        title, why = _classify(raw)
+        if title:
+            # `#` is a fragment separator in URLs and cannot appear in a title: MediaWiki
+            # silently drops everything after it, so truncate but say so.
+            if "#" in title:
+                trunc = title.split("#", 1)[0]
+                warnings.append({"raw": raw, "reason":
+                                 f"'{title}' — a '#' starts a fragment; scoring the part before it "
+                                 f"({trunc!r})"})
+                title = trunc
+            bad = sorted(set(_TITLE_ILLEGAL) & set(title))
+            if bad and title:
+                warnings.append({"raw": raw, "reason":
+                                 f"'{title}' contains {' '.join(bad)} — not valid in a MediaWiki "
+                                 f"title (see the pattypan skill's filename rules), so it cannot "
+                                 f"exist on Commons"})
+            if title:
+                items.append({"raw": raw, "title": title, "wiki": _wiki_for(raw)})
+        else:
+            warnings.append({"raw": raw, "reason": why})
+    # dedupe on (wiki, normalised title), keeping first occurrence
+    seen, deduped = set(), []
+    for it in items:
+        key = (it["wiki"], it["title"].lower().replace("_", " "))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(it)
+    return {"items": deduped, "warnings": warnings}
+
+
+def _norm_title(name: str) -> str:
+    name = urllib.parse.unquote(name).replace("_", " ").strip()
+    name = re.sub(r"\s+", " ", name)
+    return "File:" + name[5:] if name.lower().startswith("file:") else "File:" + name
+
+
+def _classify(raw: str):
+    low = raw.lower()
+    # Anything that looks like a URL or bare host/path (with or without a scheme).
+    looks_like_url = bool(re.match(r"^(https?:)?//", low)) or bool(
+        re.match(r"^[\w.-]+\.(?:org|com|net|io)/", low))
+    if looks_like_url:
+        url = raw
+        if raw.startswith("//"):
+            url = "https:" + raw
+        elif not raw.lower().startswith("http"):
+            url = "https://" + raw
+        u = urllib.parse.urlsplit(url)
+        host, path = u.netloc.lower(), urllib.parse.unquote(u.path)
+        query = urllib.parse.parse_qs(u.query)
+        if "wikimedia.org" not in host and "wikipedia.org" not in host:
+            return None, "not a Wikimedia URL"
+        if "title" in query:                                   # index.php?title=File:…
+            return _norm_title(query["title"][0]), None
+        if host.startswith(("upload.", "thumb.")):             # direct media host
+            parts = [p for p in path.split("/") if p]
+            if not parts:
+                return None, "no filename in that upload URL"
+            name = _THUMB_PREFIX.sub("", parts[-1])            # 640px-Foo.jpg -> Foo.jpg
+            if not os.path.splitext(name)[1]:
+                return None, "no filename extension in that upload URL"
+            return _norm_title(name), None
+        tail = path.split("/wiki/", 1)[-1] if "/wiki/" in path else ""
+        lowtail = tail.lower()
+        for marker in ("special:filepath/", "special:redirect/file/"):
+            if lowtail.startswith(marker):
+                return _norm_title(tail[len(marker):]), None
+        if lowtail.startswith(("file:", "image:")):
+            return _norm_title(tail), None
+        return None, "Wikimedia URL without a File: path"
+    # Special:FilePath without any scheme or host
+    m = re.match(r"^(?:Special:(?:FilePath|Redirect/file)/)(.+)$", raw, re.I)
+    if m:
+        return _norm_title(m.group(1)), None
+    # titles
+    if low.startswith("category:"):
+        return None, "categories are not supported yet — paste the files, or request this feature"
+    if low.startswith("template:"):
+        return None, "templates are not images"
+    if low.startswith(("file:", "image:")):
+        rest = raw.split(":", 1)[1]
+        name = rest.split("|")[0].strip()      # a pipe cannot appear in a title …
+        if not name or not os.path.splitext(name)[1]:
+            bad = sorted(set(_TITLE_ILLEGAL) & set(rest))
+            if bad:
+                return None, ("%r contains %s, which cannot appear in a MediaWiki title "
+                              "(so this file cannot exist)" % (rest.strip(), " ".join(bad)))
+            return None, "incomplete File: title (no filename)"
+        return _norm_title(name), None
+    # bare filename
+    if os.path.splitext(low)[1] in _IMAGE_EXT:
+        return _norm_title(raw), None
+    return None, "unrecognised input (no File: prefix, URL and not a known media extension)"
+
+
+# ----------------------------------------------------------------- Commons API
+def _api(host: str, params: dict, timeout: int = 60) -> dict:
+    """Query any Wikimedia wiki's Action API (multi-title lists are pipe-separated; see below)."""
+    params = dict(params, format="json", formatversion="2")
+    req = urllib.request.Request(f"https://{host}/w/api.php?" + urllib.parse.urlencode(params),
+                                 headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+# Project host inferred from a media URL path, so upload.wikimedia.org links resolve on the right wiki.
+_UPLOAD_PROJECT = {"commons": "commons.wikimedia.org", "meta": "meta.wikimedia.org",
+                   "species": "species.wikimedia.org", "wikidata": "www.wikidata.org"}
+
+
+def _project_from_upload_path(path: str) -> str:
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 2 and parts[0] == "wikipedia":
+        code = parts[1]
+        return _UPLOAD_PROJECT.get(code, f"{code}.wikipedia.org" if len(code) <= 3 else
+                                  f"{code}.wikimedia.org")
+    return "commons.wikimedia.org"
+
+
+def resolve(items: list, batch: int = 50) -> dict:
+    """Resolve File: titles to metadata + a thumbnail URL, batched per wiki.
+
+    `items` is a list of {"title": ..., "wiki": ...}. The key of the returned mapping is
+    (wiki, title). Titles are joined with "|" — **never** with commas: the Action API does not
+    treat a comma as a title separator, so `titles=A,B` is one (bogus) title, and Commons file
+    names legitimately contain commas.
+    """
+    out = {}
+    by_wiki = {}
+    norm_items = [({"title": it, "wiki": None} if isinstance(it, str) else it) for it in items]
+    for it in norm_items:
+        by_wiki.setdefault(it.get("wiki") or "commons.wikimedia.org", []).append(it["title"])
+    for host, titles in by_wiki.items():
+        for i in range(0, len(titles), batch):
+            chunk = titles[i:i + batch]
+            try:
+                d = _api(host, {"action": "query", "titles": "|".join(chunk), "redirects": 1,
+                                "prop": "imageinfo", "iiprop": "url|size|mime|sha1|extmetadata",
+                                "iiurlwidth": THUMB_WIDTH})
+            except Exception as e:
+                for t in chunk:
+                    out[(host, t)] = {"ok": False, "error": f"API request failed: {e}"}
+                continue
+            for page in d.get("query", {}).get("pages", []):
+                t = page.get("title", "")
+                key = (host, t)
+                if page.get("missing"):
+                    out[key] = {"ok": False, "error": f"not found on {host}"}
+                    continue
+                ii = (page.get("imageinfo") or [{}])[0]
+                if not ii:
+                    out[key] = {"ok": False, "error": "no imageinfo returned"}
+                    continue
+                em = ii.get("extmetadata", {})
+                out[key] = {"ok": True, "wiki": host, "pageid": page.get("pageid"), "title": t,
+                            "thumburl": ii.get("thumburl"), "url": ii.get("url"),
+                            "orig_w": ii.get("width"), "orig_h": ii.get("height"),
+                            "mime": ii.get("mime"), "sha1": ii.get("sha1"),
+                            "timestamp": ii.get("timestamp"),
+                            "license": em.get("LicenseShortName", {}).get("value", ""),
+                            "artist": re.sub(r"<[^>]+>", "",
+                                             em.get("Artist", {}).get("value", ""))[:120]}
+            # MediaWiki normalises titles (underscores, `file:` -> `File:`, first letter) and
+            # follows redirects; map both back onto the title the user actually pasted.
+            norm = {n["from"]: n["to"] for n in d.get("query", {}).get("normalized", [])}
+            for rd in d.get("query", {}).get("redirects", []):
+                norm[rd["from"]] = rd["to"]
+            for requested in chunk:
+                if (host, requested) in out:
+                    continue
+                target = norm.get(requested) or norm.get(norm.get(requested, ""), None)
+                if target and (host, target) in out:
+                    merged = dict(out[(host, target)])
+                    merged["normalized_from"] = requested
+                    out[(host, requested)] = merged
+                else:
+                    out[(host, requested)] = {"ok": False,
+                                              "error": f"could not resolve on {host}"}
+    return out
+
+
+def fetch_bytes(url: str, timeout: int = 120) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def image_size(data: bytes):
+    """Width/height without Pillow: JPEG, PNG, GIF, WebP."""
+    try:
+        if data[:2] == b"\xff\xd8":                      # JPEG
+            i = 2
+            while i < len(data) - 9:
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = data[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB,
+                              0xCD, 0xCE, 0xCF):
+                    h = int.from_bytes(data[i + 5:i + 7], "big")
+                    w = int.from_bytes(data[i + 7:i + 9], "big")
+                    return w, h
+                i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+        elif data[:8] == b"\x89PNG\r\n\x1a\n":
+            return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+        elif data[:6] in (b"GIF87a", b"GIF89a"):
+            return (int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little"))
+        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            if data[12:16] == b"VP8X":
+                return (int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1)
+            if data[12:16] == b"VP8 ":
+                return (int.from_bytes(data[26:28], "little") & 0x3FFF,
+                        int.from_bytes(data[28:30], "little") & 0x3FFF)
+    except Exception:
+        return None
+    return None
+
+
+# -------------------------------------------------------------- LiftWing call
+def score_image(img_b64: str, budget: Budget, timeout: int = 180) -> dict:
+    """One decision call. Honours the hourly budget and Retry-After."""
+    wait = budget.wait_seconds()
+    if wait > 0:
+        time.sleep(min(wait, 300))
+    body = {"model": "llm-clef-flash", "state": STATE, "images": [img_b64], "questions": QUESTIONS}
+    req = urllib.request.Request(LIFTWING, data=json.dumps(body).encode(), method="POST")
+    req.add_header("User-Agent", UA)
+    req.add_header("Content-Type", "application/json")
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            code, hdrs = r.status, dict(r.headers)
+            ttfb = round(time.time() - t0, 3)       # headers in hand = queue + compute done
+            payload = r.read().decode()
+    except urllib.error.HTTPError as e:
+        code, hdrs = e.code, dict(e.headers)
+        ttfb = round(time.time() - t0, 3)
+        payload = e.read().decode()
+    wall = round(time.time() - t0, 3)
+    served = {"ttfb_s": ttfb, "upstream_ms": hdrs.get("x-envoy-upstream-service-time"),
+              "server": hdrs.get("server"), "envoy_limited": hdrs.get("x-envoy-ratelimited")}
+    budget.note_call()
+    if code == 429:
+        ra = hdrs.get("retry-after")
+        budget.note_429(ra)
+        return {"http": code, "wall_s": wall, "error": "rate limited",
+                "retry_after": ra, "detail": payload[:200], **served}
+    if code != 200:
+        return {"http": code, "wall_s": wall, "error": "request failed",
+                "detail": payload[:300], **served}
+    try:
+        j = json.loads(payload)
+    except Exception:
+        return {"http": code, "wall_s": wall, "error": "unparseable response",
+                "detail": payload[:200], **served}
+    return {"http": 200, "wall_s": wall, "answers": j.get("answers", {}),
+            "usage": j.get("usage", {}), "model": j.get("model"), **served}

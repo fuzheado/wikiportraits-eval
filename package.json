@@ -1,0 +1,12 @@
+{
+  "name": "wikiportraits-eval",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Dev-only tooling for the WikiPortraits Eval app: the DOM test for the results list. The app itself is stdlib Python and needs no npm packages to run or deploy.",
+  "scripts": {
+    "test:dom": "node test_render_dom.js"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

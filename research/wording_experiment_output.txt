@@ -1,0 +1,45 @@
+cached photos with a current infobox_ready: 57
+  chosen: 0.010  File:Wikimedia Movement logo Arabic vertical in white.svg
+  chosen: 0.208  File:Sundance Film Festival 2024 - Jenni Trang Le-104A3273.jpg
+  chosen: 0.528  File:Irina Tjelle - true crime festival 2025-1.jpg
+  chosen: 0.740  File:Sundance Film Festival 2024 - Porcelain War - Andrey Stefanov-104A2045.jpg
+  image ready: 85 KB b64  File:Wikimedia Movement logo Arabic vertical in white.svg
+  image ready: 269 KB b64  File:Sundance Film Festival 2024 - Jenni Trang Le-104A3273.jpg
+  image ready: 269 KB b64  File:Irina Tjelle - true crime festival 2025-1.jpg
+  image ready: 480 KB b64  File:Sundance Film Festival 2024 - Porcelain War - Andrey Stefanov-104A2045.jpg
+  V1 current (Wikipedia infobox) File:Wikimedia Movement logo Arabic vertical http=200  57.32s -> 0.024
+  V1 current (Wikipedia infobox) File:Sundance Film Festival 2024 - Jenni Tra http=200  57.21s -> 0.190
+  V1 current (Wikipedia infobox) File:Irina Tjelle - true crime festival 2025 http=200  56.47s -> 0.357
+  V1 current (Wikipedia infobox) File:Sundance Film Festival 2024 - Porcelain http=200  57.14s -> 0.676
+  V2 plain + criteria            File:Wikimedia Movement logo Arabic vertical http=200  56.90s -> 0.052
+  V2 plain + criteria            File:Sundance Film Festival 2024 - Jenni Tra http=200  55.46s -> 0.814
+  V2 plain + criteria            File:Irina Tjelle - true crime festival 2025 http=200  57.01s -> 0.834
+  V2 plain + criteria            File:Sundance Film Festival 2024 - Porcelain http=200  57.26s -> 0.920
+  V3 professional portrait       File:Wikimedia Movement logo Arabic vertical http=200  56.44s -> 0.164
+  V3 professional portrait       File:Sundance Film Festival 2024 - Jenni Tra http=200  56.33s -> 0.939
+  V3 professional portrait       File:Irina Tjelle - true crime festival 2025 http=200  56.43s -> 0.944
+  V3 professional portrait       File:Sundance Film Festival 2024 - Porcelain http=200  56.86s -> 0.960
+  V4 score 0-4 portrait          File:Wikimedia Movement logo Arabic vertical http=200  56.33s -> 0.071
+  V4 score 0-4 portrait          File:Sundance Film Festival 2024 - Jenni Tra http=200  56.36s -> 0.594
+  V4 score 0-4 portrait          File:Irina Tjelle - true crime festival 2025 http=200  56.39s -> 0.642
+  V4 score 0-4 portrait          File:Sundance Film Festival 2024 - Porcelain http=200  57.99s -> 0.676
+  V5 choice publish/pass         File:Wikimedia Movement logo Arabic vertical http=200  57.42s -> 0.037
+  V5 choice publish/pass         File:Sundance Film Festival 2024 - Jenni Tra http=200  56.18s -> 0.846
+  V5 choice publish/pass         File:Irina Tjelle - true crime festival 2025 http=200  56.64s -> 0.708
+  V5 choice publish/pass         File:Sundance Film Festival 2024 - Porcelain http=200  57.05s -> 0.877
+
+=== summary by variant ===
+  V1 current (Wikipedia infobox) n=4 mean 0.311 sd 0.241 min 0.024 max 0.676 span 0.652 in[.35,.65] 1/4
+  V2 plain + criteria            n=4 mean 0.655 sd 0.350 min 0.052 max 0.920 span 0.868 in[.35,.65] 0/4
+  V3 professional portrait       n=4 mean 0.752 sd 0.339 min 0.164 max 0.960 span 0.796 in[.35,.65] 0/4
+  V4 score 0-4 portrait          n=4 mean 0.496 sd 0.247 min 0.071 max 0.676 span 0.605 in[.35,.65] 2/4
+  V5 choice publish/pass         n=4 mean 0.617 sd 0.341 min 0.037 max 0.877 span 0.840 in[.35,.65] 0/4
+
+=== per image (rows = image, cols = variant) ===
+  File:Wikimedia Movement logo Arabic vert cur=0.010 | 0.024 0.052 0.164 0.071 0.037
+  File:Sundance Film Festival 2024 - Jenni cur=0.208 | 0.190 0.814 0.939 0.594 0.846
+  File:Irina Tjelle - true crime festival  cur=0.528 | 0.357 0.834 0.944 0.642 0.708
+  File:Sundance Film Festival 2024 - Porce cur=0.740 | 0.676 0.920 0.960 0.676 0.877
+
+calls: 20  median wall 56.9s  total 19.2 min
+JSONL: /opt/data/clef-liftwing/wording_experiment.jsonl
