@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.5.0 · stdlib Python only · last full test pass 2026-10-13
+App version 0.5.1 · stdlib Python only · last full test pass 2026-10-13
 
 ---
 
@@ -189,6 +189,12 @@ concurrency; you will only burn quota.
   from both the Mac and the WMCS origin) — Commons resolution, thumbnails, jobs and error
   handling all verified working around it. Re-run `python3 verify_live_two.py <URL>` (1 fresh
   call) and `python3 test_ui_contract.py <URL>` once the endpoint recovers.
+- **Deploy gotcha (hit 2026-10-13): after a build, a plain `webservice buildservice restart`
+  can serve the node's cached `:latest` — the app version does not change.** Fix: stop, then
+  start with the digest pinned:
+  `toolforge webservice buildservice start --buildservice-image tool-wikiportraits-eval/tool-wikiportraits-eval@sha256:<digest> --mount=none -m 512Mi`
+  (copy the digest from `toolforge build list`). Note a restart kills in-memory jobs — never
+  mid-run (see §10).
 - Preview alternative: a quick Cloudflare tunnel (`start_tunnel.py`, URL and log in `serve/`).
   A quick tunnel dies with the process — it is a preview, not a deployment.
 - **The first thing to do on Toolforge (planned experiment):** run `probe_latency_now.py` from a
