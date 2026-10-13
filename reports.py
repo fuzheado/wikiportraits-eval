@@ -1,9 +1,9 @@
 """Aggregate statistics and report builders (MD, CSV, JSON, PDF) for a scoring job."""
-import csv, io, json, os, statistics
+import csv, io, json, math, os, statistics
 from datetime import datetime, timezone
 
 import wiclient
-from pdfmin import PDF
+from pdfmin import PDF, MARGIN, CONTENT_W
 
 ORDER = ["face_visible", "pose", "quality", "infobox_ready", "publish_ready", "eyes_to_camera"]
 TYPE_LABEL = {"noul": "yes/no", "choice": "choice", "score": "score"}
@@ -279,6 +279,78 @@ def build_json(items: list, meta: dict) -> str:
     }, indent=1, ensure_ascii=False)
 
 
+def _pdf_chart(doc, items):
+    """The composite-distribution chart, as in the web UI: thumbnails plotted along a
+    0 → best+headroom axis, stacked into lanes when they would overlap.
+
+    The same thumbnail bytes as the per-image cards, registered once per unique image and
+    repositioned on the axis — so a charted photo costs no extra embed.
+    """
+    done = [it for it in items if it.get("status") == "done" and composite(it) is not None]
+    done.sort(key=composite)
+    if len(done) < 2:
+        return
+    TW, TH, GAP, ROW = 46.0, 60.0, 8.0, 84.0     # thumb box, min gap, lane height (points)
+    LANES_MAX = 4
+    maxc = composite(done[-1])
+    top = min(1.0, math.ceil((maxc * 1.1 + 0.02) * 10) / 10)   # one-decimal ceiling w/ headroom
+    lanes, placed = [], []
+    for it in done:
+        x = MARGIN + (composite(it) / top) * CONTENT_W
+        lane = 0
+        while (lane < LANES_MAX and lane < len(lanes)
+               and abs(x - lanes[lane]) < TW + GAP):
+            lane += 1
+        if lane == len(lanes):
+            lanes.append(x)
+        else:
+            lanes[lane] = x
+        placed.append((it, x, lane))
+    max_lane = max(l for _, _, l in placed)
+    # reserve, above the axis: lane*ROW per lane + one lane's content (score 4 + gap 9 +
+    # thumb ≤60 + rank 8 ≈ 81 ≤ ROW); below the axis: tick labels. Keeps stacked thumbs from
+    # ever reaching the heading above.
+    doc._need(max_lane * ROW + 84 + 34)
+    doc.text("Composite by photo", size=11, bold=True)
+    doc.small(f"axis 0 → {top:.1f} (best photo {maxc:.3f}) · our arithmetic, min(face, eyes) × "
+              f"pose weight — not a model probability · thumbs stack when they would overlap")
+    doc.spacer(4)
+    y_axis = doc.y - (max_lane * ROW + 84)
+    doc.line_at(MARGIN, y_axis, MARGIN + CONTENT_W, y_axis, color=(0.25, 0.29, 0.35), w=1.0)
+    v = 0.0
+    while v <= top + 1e-9:
+        x = MARGIN + (v / top) * CONTENT_W
+        doc.line_at(x, y_axis, x, y_axis - 4)
+        doc.text_at(f"{v:.1f}", x - 8, y_axis - 13, size=6)
+        v = round(v + 0.1, 10)
+    # register each unique thumbnail once, reuse the name for its position on the axis
+    reg = {}
+    rank = len(done)
+    for it, x, lane in placed:                   # done is ascending: first placed is last rank
+        data = _thumb_bytes(it)
+        name = None
+        if data:
+            key = hash(data)
+            if key not in reg:
+                reg[key] = doc.add_image(data, label=label(it))
+            name = reg[key]
+        score_y = y_axis + 4 + lane * ROW        # score under the thumb, inside its lane, so
+        thumb_bottom = score_y + 9               # stacked lanes never collide with each other
+        if name:
+            w, h = doc.image(name, x - TW / 2, thumb_bottom, TW, TH)
+            doc.text_at(f"#{rank}", x - 6, thumb_bottom + h + 1.5, size=6, bold=True)
+        else:                                    # no bytes: an empty slot, still visibly placed
+            for x1, y1, x2, y2 in ((x - TW / 2, thumb_bottom, x + TW / 2, thumb_bottom),
+                                   (x - TW / 2, thumb_bottom + TH, x + TW / 2, thumb_bottom + TH),
+                                   (x - TW / 2, thumb_bottom, x - TW / 2, thumb_bottom + TH),
+                                   (x + TW / 2, thumb_bottom, x + TW / 2, thumb_bottom + TH)):
+                doc.line_at(x1, y1, x2, y2, color=(0.78, 0.82, 0.87))
+            doc.text_at(f"#{rank}", x - 6, thumb_bottom + TH + 1.5, size=6, bold=True)
+        doc.text_at(f"{composite(it):.3f}", x - 11, score_y, size=6.5)
+        rank -= 1
+    doc.y = y_axis - 18
+
+
 def build_pdf(items: list, meta: dict) -> bytes:
     st = stats(items)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -328,6 +400,8 @@ def build_pdf(items: list, meta: dict) -> bytes:
                      f"baseline of {lat['baseline_s']} s - {lat['factor']}x")
     for l in lines:
         doc.text(l, size=9)
+    doc.spacer(6)
+    _pdf_chart(doc, items)
     doc.spacer(8)
     doc.h2("All images, ranked by composite")
     widths = [14, 128, 44, 44, 40, 44, 34, 36, 32]

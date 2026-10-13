@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(HERE, "cache"))
 MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
-INFLIGHT = max(1, int(os.environ.get("INFLIGHT", "2")))   # concurrent model calls within a run
+INFLIGHT = max(1, int(os.environ.get("INFLIGHT", "1")))   # concurrent model calls (1 = serial)
 MAX_INPUT_ITEMS = int(os.environ.get("MAX_INPUT_ITEMS", "200"))  # cap per run (DoS guard)
 EVAL_MAX = int(os.environ.get("EVAL_MAX", "25"))       # per-call cap for POST /api/eval
 PROBE_TTL = float(os.environ.get("PROBE_TTL", "600"))  # reuse a pre-flight answer for 10 min

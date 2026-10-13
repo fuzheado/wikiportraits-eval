@@ -224,6 +224,16 @@ class PDF:
                         f"{MARGIN + w:.2f} {self.y:.2f} l S")
         self.y -= 6
 
+    def text_at(self, s, x, y, size=7.0, bold=False, color=(0.10, 0.12, 0.18)):
+        """Free-positioned text, baseline at (x, y) — used by the distribution chart."""
+        self.buf.append(f"BT /{'F2' if bold else 'F1'} {size:.1f} Tf {color[0]:.2f} {color[1]:.2f} "
+                        f"{color[2]:.2f} rg {x:.2f} {y:.2f} Td ({_esc(s)}) Tj ET")
+
+    def line_at(self, x1, y1, x2, y2, color=(0.70, 0.74, 0.79), w=0.7):
+        """Free-positioned line segment."""
+        self.buf.append(f"{color[0]:.2f} {color[1]:.2f} {color[2]:.2f} RG {w:.2f} w "
+                        f"{x1:.2f} {y1:.2f} m {x2:.2f} {y2:.2f} l S")
+
     def bar(self, frac: float, width: float = 60, height: float = 5, color=(0.12, 0.37, 0.66)):
         frac = max(0.0, min(1.0, float(frac)))
         self.buf.append(f"{color[0]} {color[1]} {color[2]} rg {MARGIN:.2f} {self.y:.2f} "

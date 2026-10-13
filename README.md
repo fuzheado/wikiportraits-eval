@@ -157,7 +157,7 @@ PORT=8080 python3 app.py       # honour a supplied port (Toolforge does this)
 ```
 
 Optional settings: `THUMB_WIDTH` (640), `SPACING` (0.9 s between call *starts*, global across
-`INFLIGHT` streams), `INFLIGHT` (2 concurrent model calls within a run), `HOURLY_BUDGET` (100),
+`INFLIGHT` streams), `INFLIGHT` (1 = serial, the default; set 2 for two concurrent calls within a run — call starts stay SPACING apart globally), `HOURLY_BUDGET` (100),
 `MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run), `PARSE_MAX` (1000 per parse),
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
@@ -213,7 +213,8 @@ finished so far), and every one of them **shows the photo next to its evaluation
 - **Markdown** — the ranked table, then one section per photo with the thumbnail inline above its
   determinations.
 - **PDF** — the same, with each photo embedded as a real image (JPEG passthrough, PNG decoded) in a
-  card beside its numbers. Self-contained: no external assets, so it looks the same wherever it is
+  card beside its numbers, **plus the composite-distribution chart**: every photo's thumbnail plotted
+  on a 0 → best-score axis, stacked when they would overlap — the same picture the web UI shows. Self-contained: no external assets, so it looks the same wherever it is
   opened.
 - **JSON** — everything, including the raw answers, the composite and the run's spread.
 - **CSV** — one row per photo with `composite` and `P_publish` columns, for spreadsheets.
