@@ -5,7 +5,11 @@ with the reasons, and a report you can attach to an email.**
 
 WikiPortraits events produce thousands of photographs, and the hard part is not taking or uploading
 them — it is choosing. This tool puts every photo in front of a Wikimedia-hosted model that answers
-five specific questions about it, then sorts them so the strongest candidates are at the top.
+six specific questions about it, then sorts them so the strongest candidates are at the top.
+
+**Live:** <https://wikiportraits-eval.toolforge.org> · code:
+<https://github.com/fuzheado/wikiportraits-eval> · all model calls are made by the server
+(a Toolforge pod on the Wikimedia network), never by your browser.
 
 It does not edit, tag or upload anything. It reads photos and tells you what a model thinks of them,
 with the model's exact questions shown to you.
@@ -224,12 +228,14 @@ A photo that cannot be embedded is listed at the end of the PDF rather than sile
 ## Tests
 
 ```bash
+bash run_all_tests.sh        # everything below, in order + the live contract test
 python3 test_forms.py        # input formats (offline)
 python3 test_commas.py       # file names containing commas (offline)
 python3 test_wsgi.py         # Toolforge uWSGI entry point (offline)
 python3 test_pipeline.py     # download/scoring overlap + state machine (offline)
 python3 test_reports.py      # composite, P(publish), spread, thumbnails in MD/PDF (offline)
 python3 check_js.py          # the inline script still parses (offline)
+.venv-pdf/bin/python test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
 node test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
 python3 test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content
 WANT=4 python3 live_pipeline_check.py [URL]   # live: pipeline, states, latency on fresh files

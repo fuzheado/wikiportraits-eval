@@ -32,6 +32,7 @@ Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 resta
 bash run_all_tests.sh                    # everything below, in order
 python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py   # offline
 python3 check_js.py                      # offline: the page script parses (node --check)
+python3 check_docs.py check_memo_refs.py # offline: docs exist & cite real files (free)
 node test_render_dom.js                  # offline (needs `npm install` once — jsdom, ~25 MB)
 .venv-pdf/bin/python test_pdf_images.py             # renders a PDF back to PNG for eyeballing
                                                     # (.venv-pdf: python3 -m venv .venv-pdf && .venv-pdf/bin/pip install pypdfium2 pypdf)
@@ -184,11 +185,16 @@ concurrency; you will only burn quota.
   `toolforge build start https://github.com/Fuzheado/wikiportraits-eval` then
   `toolforge webservice buildservice start --mount=none -m 512Mi`; logs via
   `kubectl logs deployment/wikiportraits-eval` from the tool account.
-- At deploy time the **LiftWing `llm-clef-flash` engine was down** (HTTP 500
-  `Error during inference: EngineCore encountered an issue`, ~0.1 s, text-only and image alike,
-  from both the Mac and the WMCS origin) — Commons resolution, thumbnails, jobs and error
-  handling all verified working around it. Re-run `python3 verify_live_two.py <URL>` (1 fresh
-  call) and `python3 test_ui_contract.py <URL>` once the endpoint recovers.
+- **Endpoint state, 2026-10-13:** the `EngineCore` outage from deploy time resolved the same day;
+  since then the endpoint has oscillated between ~0.3-0.5 s warm, ~5 s, and ~29-31 s per call
+  (`service-side` verdict) — sometimes within the same hour, with text-only calls equally slow,
+  so the app's pre-flight and verdict machinery are what make the run readable. The 5-photo live
+  runs, `/api/eval` and all four reports verified working on production.
+- **Confirmed 2026-10-13: all model calls are server-side.** The LiftWing endpoint is referenced
+  only in `wiclient.score_image()`/`probe_endpoint()`; a browser instrumented during a scored run
+  contacted exactly two hosts (this app and `thumb.wikimedia.org` — the documented thumbnail
+  exception), and a fresh score completes fine with no browser open at all. Origin is the
+  Toolforge pod (WMCS network).
 - **Deploy gotcha (hit 2026-10-13): after a build, a plain `webservice buildservice restart`
   can serve the node's cached `:latest` — the app version does not change.** Fix: stop, then
   start with the digest pinned:
@@ -199,48 +205,57 @@ concurrency; you will only burn quota.
   A quick tunnel dies with the process — it is a preview, not a deployment.
 - **The first thing to do on Toolforge (planned experiment):** run `probe_latency_now.py` from a
   Toolforge shell and compare with the same script from the development host — same client, same
-  files, same minute, only the origin IP differs. Then `live_pipeline_check.py` against the deployed
-  URL for the app path. This separates "inside the Wikimedia network is faster" from "the endpoint is
-  having a bad week". WMCS also lifts the quota (known clients: 200k req/h, and WMCS is exempt from
-  the generic API rate limits) — that benefit is documented and should show up as no more pacing.
+  files, same minute, only the origin IP differs. This separates "inside the Wikimedia network is
+  faster" from "the endpoint is having a bad week". WMCS also lifts the quota (known clients:
+  200k req/h, and WMCS is exempt from the generic API rate limits) — that benefit is documented
+  and should show up as no more pacing.
 - While testing, **do not restart the server** (`restart_app.py`) — someone may be mid-run; jobs are
   in-memory and a restart discards them.
 
 ## 7. Next steps, ranked (with the trap that makes each worth doing)
 
 **Small, high value**
-1. **Deploy to Toolforge** — stable URL, WMCS origin, higher quota; then repeat the latency probe.
+1. **Settle the concurrency question, then maybe re-enable 2 streams** — the owner suspects the
+   endpoint punishes two concurrent calls, so `INFLIGHT` defaults to 1 (serial). The overlap
+   machinery is built and unit-verified (2 streams, 35.5 s vs 61.4 s serial when the endpoint was
+   at ~30 s/call). One production run of 2 fresh photos with `INFLIGHT=2` — comparing per-call
+   `wall_s` against serial — settles whether the endpoint queues same-origin calls. Keep serial
+   unless the measurement is clearly neutral or better.
 2. **Periodic latency probe + trend** — the endpoint moved 50× in a day with no announcement; a cron
    that runs `probe_latency_now.py` hourly and records the median makes the app's verdict meaningful
    and gives a real regression record (see the observability reference in §9).
 3. **Show the full distribution per photo on demand** — the API already returns the whole probability
    vector; exposing it costs nothing and helps users trust (or distrust) a score.
-4. **Decide how the headline is presented** — research is done and the decision is pending (see §11).
+4. **Cache persistence on Toolforge** — the deployment runs `--mount=none`, so `cache/` is wiped on
+   every webservice restart (re-scoring then costs one call per photo again). Options: deploy with
+   the NFS mount and point `CACHE_DIR` at the tool home, or accept the wipe (WMCS origin is fast
+   when the endpoint is warm). Decide before the photo count grows.
+5. **Decide how the headline is presented** — research is done and the decision is pending (see §11).
    The evidence does *not* support swapping the question: today's `infobox_ready` separates candidates
    better than any rewrite tested. The cheap fix is presentational (rank + percentile within the run);
    any question change needs a 12+ portrait run and hand labels first.
 
 **Medium**
-5. **`Category:` / PetScan / SPARQL input** with an explicit member cap and a confirmation step
+6. **`Category:` / PetScan / SPARQL input** with an explicit member cap and a confirmation step
    ("Category:Foo has 1,240 files; score the first 200?"). The parser already warns instead of
    guessing; this needs the UX, not the API work.
-6. **Run history + run-to-run diff** (small SQLite or JSON store): "these 12 photos got worse after
+7. **Run history + run-to-run diff** (small SQLite or JSON store): "these 12 photos got worse after
    the file was overwritten / after I changed the schema".
-7. **Server-sent events instead of 1 s polling** — nicer clocks, less chatter; the incremental
+8. **Server-sent events instead of 1 s polling** — nicer clocks, less chatter; the incremental
    renderer is already the right shape for it.
-8. **Thumbnail proxy + local cache** — makes the deployment fully server-origin (and offline-capable),
+9. **Thumbnail proxy + local cache** — makes the deployment fully server-origin (and offline-capable),
    at the cost of the app's bandwidth.
 
 **Larger / research**
-9. **Calibration study** — label ~100–200 photos by hand, produce a precision/recall curve, then
+10. **Calibration study** — label ~100–200 photos by hand, produce a precision/recall curve, then
    replace the arbitrary 0.5 with something defensible. This is the single biggest credibility win,
    and it is the only thing that can adjudicate §11's ordering disagreement.
-10. **Model-agreement study** — score the same set with `clef` (27 B sibling) and a Qwen LLM on the
+11. **Model-agreement study** — score the same set with `clef` (27 B sibling) and a Qwen LLM on the
    same platform; if the rankings disagree, the "which photo is best" question is model-specific and
    must be said out loud.
-11. **Portfolio-style questions** — "is this the best available shot of this person?" is a ranking
+12. **Portfolio-style questions** — "is this the best available shot of this person?" is a ranking
     question, not five independent binaries; the schema (and possibly the cache key) would change.
-12. **i18n** — message files for the UI and (carefully) for the schema wording, which is English-only
+13. **i18n** — message files for the UI and (carefully) for the schema wording, which is English-only
     today; changing the wording changes the numbers, so it belongs behind the schema hash.
 
 ## 8. Loose ends
