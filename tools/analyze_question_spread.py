@@ -3,6 +3,9 @@
 composites built only from the 'visible fact' questions. No API calls."""
 import glob
 import json
+import os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root (this file is in tools/)
 
 
 def stats(name, vals):
@@ -19,7 +22,7 @@ def stats(name, vals):
 
 
 rows = []
-for f in glob.glob("cache/*.json"):
+for f in glob.glob(os.path.join(ROOT, "cache", "*.json")):
     try:
         d = json.load(open(f))
     except Exception:  # noqa: BLE001

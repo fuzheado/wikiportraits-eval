@@ -5,8 +5,14 @@ import glob
 import json
 import os
 import time
+import os
+import sys
 import urllib.error
 import urllib.request
+
+# this file lives in tools/; the app's modules and data files are at the repo root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 import wiclient
 
@@ -49,7 +55,7 @@ print("  body:", payload2[:300])
 
 print("\n=== cached infobox_ready census ===")
 rows = []
-for f in sorted(glob.glob("cache/*.json")):
+for f in sorted(glob.glob(os.path.join(ROOT, "cache", "*.json"))):
     try:
         d = json.load(open(f))
     except Exception:  # noqa: BLE001

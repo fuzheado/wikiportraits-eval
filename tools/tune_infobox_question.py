@@ -10,12 +10,17 @@ isolated to the wording; the app's full 5-question schema is re-validated separa
 import glob
 import json
 import os
+import sys
 import time
 from typing import Optional
 
+# this file lives in tools/; the app's modules and data files are at the repo root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
 import wiclient
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "wording_experiment.jsonl")
+OUT = os.path.join(ROOT, "research", "wording_experiment.jsonl")
 STATE = wiclient.STATE
 LIMIT_S = 1500          # hard stop: 25 minutes
 
@@ -81,11 +86,11 @@ def value_of(ans: dict) -> Optional[float]:
 
 
 def main() -> None:
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(ROOT)          # so cache/ lookups below mean the repo's cache, not tools/
 
     # ---- census: what we already have, and pick four with a spread -----------------
     rows = []
-    for f in sorted(glob.glob("cache/*.json")):
+    for f in sorted(glob.glob(os.path.join(ROOT, "cache", "*.json"))):
         try:
             d = json.load(open(f))
         except Exception:  # noqa: BLE001

@@ -33,10 +33,16 @@ import json
 import statistics
 import sys
 import threading
+import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# this file lives in tools/; the app's modules and data files are at the repo root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 import wiclient
 

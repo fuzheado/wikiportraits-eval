@@ -17,7 +17,7 @@ import urllib.request
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765"
 UA = "WikiPortraitsEval/0.4 (pipeline check)"
-CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")   # repo root; this file is in tools/
 WANT = int(os.environ.get("WANT", "4"))
 
 

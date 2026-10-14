@@ -19,7 +19,7 @@ TITLES = [
     "File:Irina Tjelle - true crime festival 2025-1.jpg",
     "File:Wikimedia Movement logo Arabic vertical in white.svg",
 ]
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research")
+OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "research")   # repo root; this file is in tools/
 FAIL = []
 
 

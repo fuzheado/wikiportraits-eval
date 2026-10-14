@@ -10,7 +10,7 @@ import os
 import statistics
 import time
 
-CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")   # repo root; this file is in tools/
 rows = []
 for f in glob.glob(os.path.join(CACHE, "*.json")):
     try:

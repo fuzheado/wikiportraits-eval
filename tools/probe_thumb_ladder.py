@@ -28,7 +28,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root (this file is in tools/)
 sys.path.insert(0, REPO)
 import wiclient  # noqa: E402  (UA, image_size, fetch_bytes — reuse, do not re-implement)
 

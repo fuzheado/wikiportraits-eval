@@ -28,7 +28,8 @@ import time
 
 os.environ["CACHE_DIR"] = tempfile.mkdtemp(prefix="wp-inflight-cache-")
 os.environ["QUIET"] = "1"
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root (this file is in tools/)
+sys.path.insert(0, ROOT)
 
 import core        # noqa: E402
 import wiclient    # noqa: E402

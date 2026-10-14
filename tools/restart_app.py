@@ -5,7 +5,8 @@ Portable: uses /proc on Linux, pgrep elsewhere (macOS has no /proc).
 """
 import os, signal, subprocess, sys, time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root — app.py and
+# server.log live there, not in tools/ (this file is in tools/)
 killed = []
 me = os.getpid()
 

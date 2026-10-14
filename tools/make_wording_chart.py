@@ -94,5 +94,6 @@ d.text((44, ly + 104), "(head-and-shoulders 1.0, three-quarter 0.9, full body 0.
                        "group 0.25). Built from answers we already collect \u2014 no new question.",
        font=FS, fill=MUTED)
 
-img.save(os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "wording_comparison.png"))
+img.save(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),   # repo root
+                      "research", "wording_comparison.png"))
 print("wrote research/wording_comparison.png", img.size)

@@ -5,7 +5,7 @@ import os
 import json
 from collections import defaultdict
 
-PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "wording_experiment.jsonl")
+PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "research", "wording_experiment.jsonl")   # repo root; this file is in tools/
 
 
 def spearman(xs, ys):

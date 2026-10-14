@@ -29,8 +29,8 @@ verifiable rather than assumed. Three origins, same images, same hour:
 | origin | `x-client-ip` | serial median wall/call | note |
 |---|---|---|---|
 | home (dev Mac) | `173.79.30.139` | 0.467–0.610 s across runs | anonymous tier: 100 req/h shared |
-| via Toolforge bastion (`wmcs_tunnel.py`) | `2a02:ec80:a000:1::1c5` | 0.537–0.599 s | WMF range; known-network tier |
-| **inside the deployed pod** (`run_in_pod.sh`) | `172.16.21.201` | **0.327 s** (n=6) | production origin — and a *private* address, i.e. an in-cluster path |
+| via Toolforge bastion (`tools/wmcs_tunnel.py`) | `2a02:ec80:a000:1::1c5` | 0.537–0.599 s | WMF range; known-network tier |
+| **inside the deployed pod** (`tools/run_in_pod.sh`) | `172.16.21.201` | **0.327 s** (n=6) | production origin — and a *private* address, i.e. an in-cluster path |
 
 Two things fall out of this table, and both matter:
 
@@ -38,7 +38,7 @@ Two things fall out of this table, and both matter:
    that was wrong.** An early bracketed run (home → tunnel → home, identical payloads) appeared to
    show the tunnel ~0.25–0.45 s/call *slower*, and a plausible mechanism was written down for it
    ("TLS is end-to-end, so the forward pays the extra hop"). **It was a bug in our own harness.**
-   `wmcs_tunnel.py` passed `ControlMaster=auto`, and with a shared master the client `ssh -N`
+   `tools/wmcs_tunnel.py` passed `ControlMaster=auto`, and with a shared master the client `ssh -N`
    process **exits as soon as the forward is registered** — so the liveness check went false and
    every call re-spawned an ssh client *inside the timed region*. Dropping ControlMaster dropped the
    penalty:
@@ -73,7 +73,7 @@ that the origin did. No 429s occurred in any run.
 
 ## 2. Does the endpoint tolerate two concurrent calls? Yes
 
-`probe_concurrency.py` calls LiftWing directly (bypassing the app's pacing on purpose) in three
+`tools/probe_concurrency.py` calls LiftWing directly (bypassing the app's pacing on purpose) in three
 phases — serial, then N calls across C streams released together behind a barrier, then serial again
 as a drift check. Run inside the pod, n=12, 2 streams:
 
@@ -106,7 +106,7 @@ endpoint "punishes" two concurrent calls is not supported.**
 jobs, *before* the call is issued. So the only thing that can overlap is a call that **outlasts**
 `SPACING`.
 
-`probe_inflight_pacing.py` runs the **real `core.run_job`** against a stubbed model (zero API calls)
+`tools/probe_inflight_pacing.py` runs the **real `core.run_job`** against a stubbed model (zero API calls)
 with production's actual numbers — `SPACING=0.90`, six photos — and counts genuinely overlapping
 intervals:
 
@@ -157,13 +157,13 @@ goes slack at 0.9 s) and it needs state that the pipeline does not currently nee
 ## 5. Reproducing
 
 ```bash
-python3 probe_inflight_pacing.py                     # offline, decisive, zero API calls
-python3 wmcs_tunnel.py --check                       # prove the egress changed
-./run_in_pod.sh probe_concurrency.py --n 12 --streams 2     # production origin
-python3 run_via_toolforge.py probe_concurrency.py --n 6 --streams 2   # via the bastion
+python3 tools/probe_inflight_pacing.py                     # offline, decisive, zero API calls
+python3 tools/wmcs_tunnel.py --check                       # prove the egress changed
+./tools/run_in_pod.sh tools/probe_concurrency.py --n 12 --streams 2     # production origin
+python3 tools/run_via_toolforge.py tools/probe_concurrency.py --n 6 --streams 2   # via the bastion
 ```
 
-`wmcs_tunnel.py` + `run_via_toolforge.py` route only `api.wikimedia.org` through the bastion, so
-Commons and every other host still go direct. `run_in_pod.sh` runs a repo script inside the deployed
+`tools/wmcs_tunnel.py` + `tools/run_via_toolforge.py` route only `api.wikimedia.org` through the bastion, so
+Commons and every other host still go direct. `tools/run_in_pod.sh` runs a repo script inside the deployed
 pod (needs `LD_LIBRARY_PATH=/layers/heroku_python/python/lib` and `PYTHONPATH=/workspace`, because
 the buildpack Python is not on the default PATH for a bare `sh -s`).

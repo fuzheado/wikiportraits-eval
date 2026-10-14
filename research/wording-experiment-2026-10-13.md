@@ -41,7 +41,7 @@ WikiPortraits photograph of a public figure, taken by a volunteer photographer a
 
 ## 2. Free evidence first: how each question we already ask spreads (n=57 cached photos)
 
-No API calls — computed from `cache/` by `analyze_question_spread.py`.
+No API calls — computed from `cache/` by `tools/analyze_question_spread.py`.
 
 | question | type | sd | span | in 0.35–0.65 |
 |---|---|---|---|---|
@@ -59,7 +59,7 @@ Second, the split is by *what the criterion is*: questions about something visib
 spread across nearly the full range; questions that ask the model to apply an editorial or aesthetic
 standard collapse into a band.
 
-## 3. The wording experiment (`tune_infobox_question.py`)
+## 3. The wording experiment (`tools/tune_infobox_question.py`)
 
 Four photos, chosen by quartile from the 57 cached answers (so the sample spans the score range),
 plus one deliberate negative control. One question per record (isolated wording comparison).
@@ -173,8 +173,8 @@ than the current question, or the platform swaps the model.
 ## 7. Reproducing
 
 ```bash
-python3 analyze_question_spread.py          # the n=57 census (free)
-python3 tune_infobox_question.py            # the 4x5 experiment (20 calls, ~19 min today, ~1 min warm)
-python3 summarize_wording_experiment.py     # table from the JSONL
-.venv-pdf/bin/python make_wording_chart.py   # the chart (needs PIL; repo-relative)
+python3 tools/analyze_question_spread.py          # the n=57 census (free)
+python3 tools/tune_infobox_question.py            # the 4x5 experiment (20 calls, ~19 min today, ~1 min warm)
+python3 tools/summarize_wording_experiment.py     # table from the JSONL
+.venv-pdf/bin/python tools/make_wording_chart.py   # the chart (needs PIL; repo-relative)
 ```

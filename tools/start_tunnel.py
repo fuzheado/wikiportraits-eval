@@ -6,7 +6,8 @@ process scan uses /proc on Linux and pgrep elsewhere (macOS has no /proc).
 """
 import os, shutil, signal, subprocess, sys, time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root — serve/ lives there,
+# not in tools/ (this file is in tools/)
 SERVE = os.path.join(HERE, "serve")
 os.makedirs(SERVE, exist_ok=True)
 PORT = os.environ.get("APP_PORT", "8765")

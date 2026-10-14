@@ -6,7 +6,8 @@ import os
 import statistics
 import time
 
-ROOTS = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "research")]
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root (this file is in tools/)
+ROOTS = [os.path.join(ROOT, "cache"), os.path.join(ROOT, "research")]
 rows = []
 for root in ROOTS:
     for f in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True) + \

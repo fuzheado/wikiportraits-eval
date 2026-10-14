@@ -14,7 +14,7 @@ URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765"
 HDR = {"User-Agent": "WikiPortraitsEval/0.4 (verification)", "Content-Type": "application/json"}
 CACHED = "File:Sundance Film Festival 2024 - Porcelain War - Andrey Stefanov-104A2045.jpg"
 FRESH = "File:MKr377445 Susanne Wuest (In die Sonne schauen, Cannes 2025).jpg"
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research")
+OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "research")   # repo root; this file is in tools/
 FAIL = []
 
 

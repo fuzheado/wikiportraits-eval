@@ -354,23 +354,23 @@ python3 tests/test_default_list.py --live      # live: 1 batched Commons call, 0
 python3 tests/test_privacy.py      # the request log: no query, no IP, no UA (offline)
 python3 tests/check_js.py          # the inline script still parses (offline)
 python3 tests/check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
-python3 probe_inflight_pacing.py         # offline, 0 API calls: proves when INFLIGHT>1 does anything
+python3 tools/probe_inflight_pacing.py         # offline, 0 API calls: proves when INFLIGHT>1 does anything
 .venv-pdf/bin/python tests/test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
 node tests/test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
 python3 tests/test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content
-WANT=4 python3 live_pipeline_check.py [URL]   # live: pipeline, states, latency on fresh files
-python3 verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports inspected
-python3 probe_concurrency.py --n 12 --streams 2              # live: the endpoint's capacity for 2
+WANT=4 python3 tools/live_pipeline_check.py [URL]   # live: pipeline, states, latency on fresh files
+python3 tools/verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports inspected
+python3 tools/probe_concurrency.py --n 12 --streams 2              # live: the endpoint's capacity for 2
                                                              # streams (per-call latency, throughput)
-./run_in_pod.sh probe_concurrency.py --n 12 --streams 2      # …the same, from the production origin
+./tools/run_in_pod.sh tools/probe_concurrency.py --n 12 --streams 2      # …the same, from the production origin
 ```
 
 **Measure LiftWing from the right origin.** The endpoint classifies by **source network**: a home
 connection is the shared 100 req/hour anonymous tier, while Toolforge/WMCS is the effectively
 unlimited *known network* tier the deployment runs in — so a laptop measurement is a different
-regime. `python3 wmcs_tunnel.py --check` proves the change (the CDN's own `x-client-ip` response
-header moves), and `run_via_toolforge.py` routes any probe through the bastion; alternatively
-`./run_in_pod.sh <script> [args]` runs one **inside the deployed pod**, which is the true production
+regime. `python3 tools/wmcs_tunnel.py --check` proves the change (the CDN's own `x-client-ip` response
+header moves), and `tools/run_via_toolforge.py` routes any probe through the bastion; alternatively
+`./tools/run_in_pod.sh <script> [args]` runs one **inside the deployed pod**, which is the true production
 origin. Note what the tunnel does and does not buy you: it changes *which client class you are*
 (that is the point), and its latency overhead measured **≤ ~0.1 s** — inside the direct path's own
 run-to-run spread — so use it freely. For a latency-faithful number, run the script in the pod
