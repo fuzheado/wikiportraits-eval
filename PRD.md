@@ -83,6 +83,7 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F14 | Calibrated threshold derived from labelled data | **not shipped** (0.5 today is a reporting convenience) |
 | F15 | Show a rank within the run next to each photo, and a percentile | **rank shipped**, percentile pending |
 | F16 | Report candidate spread for the run (range and ordering among plausible candidates) | shipped |
+| F17 | Accept a **PagePile** ID (or a PetScan/SPARQL-produced list) as the input source, with an explicit member cap and a confirmation step | **not shipped** (see roadmap) |
 
 ## 6. Non-functional requirements
 
@@ -182,7 +183,7 @@ Downloads for later photos run in a background thread while the model answers fo
 |---|---|---|---|
 | All Wikimedia calls made **server-side** | Call LiftWing directly from the browser | Every call costs quota; a browser-embedded call cannot set a proper User-Agent, exposes the endpoint to abuse, and offers no cache | LiftWing adds CORS + per-user keys and a browser-native app is wanted |
 | One image per request, one call at a time | 3–5 concurrent workers | A 3-worker run burned the hourly budget in 4 calls then hit 429 for 162 s; concurrency just empties the window faster | Running from WMCS, where the budget is orders of magnitude larger |
-| Request 640 px thumbnails | Send 1024 px or originals | Server downscales to 640 anyway; 640-class thumbnails cut transferred bytes ~41 % with identical token counts and no threshold flips (Spearman 0.972 vs the 1024 px run) | A future model serves larger inputs |
+| Request the **960 px** step of Commons' thumbnail ladder (was 640 px; changed 2026-10-14) | Send 1024 px or originals | The model server downscales to 640 px whatever we send, so a larger rendition is wasted bytes (~80 % more for the 1280 bucket). **640 is not a `$wgThumbnailSteps` step**, so a 640 request was silently served the 960 asset anyway, while `imageinfo.thumbwidth` reported 640 (T388792). Asking for the step makes the request honest and costs nothing extra | A future model serves larger inputs, or Commons changes the ladder (canary: `probe_thumb_ladder.py`) |
 | Keep the model's five labels as the definition of "quality" | Write our own rubric/prompt | A custom rubric would make the output unattributable and impossible to compare with other Clef users | A labelled calibration set justifies a domain-specific rubric |
 | Report the raw probability | Apply a 0.5 threshold as "ready / not ready" | In every sample nothing exceeded ~0.71 and the distribution is model-specific; a fixed cut-off would manufacture false confidence | A calibration study produces a defensible curve |
 | Keep the editorial `infobox_ready` question as the headline | Reword it in plain language, remove the Wikipedia nouns, or switch to a 0–4 score (4 photos × 5 wordings, 20 calls, 2026-10-13) | Every rewrite emptied the 0.35–0.65 band by lifting all real portraits to 0.81–0.96, cutting the range among the three candidate portraits from **0.486 to 0.106 / 0.021 / 0.082**; the score type stayed compressed. The complaint ("all the numbers look like 0.5") is about *resemblance*, not ordering — and ordering is what triage uses (`research/wording-experiment-2026-10-13.md`) | A 12+ portrait run with hand labels shows a different wording orders photos better, or the platform swaps the model |
@@ -192,7 +193,7 @@ Downloads for later photos run in a background thread while the model answers fo
 | Thumbnails kept on disk at fetch time (`cache/thumbs/`) | Re-fetch from Commons when a report is built | The report then embeds exactly what the model saw, and works offline; costs ~100-300 KB per photo | Disk pressure on a shared host |
 | Cache by `(wiki, pageid, sha1, schema, width)` | Cache by title, or by pageid alone | Titles are renamed and overwritten; pageids collide across wikis; the schema hash invalidates old answers when the questions change | — |
 | In-memory job store + disk cache | Add a database | Single-user prototype; jobs are ephemeral and results are reproducible from cache | Opening the tool to many concurrent users |
-| No `Category:` input | Enumerate category members inline | Silent caps and slow runs on big categories; needs a limit/confirmation UX first | A cap-and-confirm interaction is designed (roadmap) |
+| No `Category:` / PagePile input yet | Enumerate category members or fetch a PagePile inline | Silent caps and slow runs on big categories; needs a limit/confirmation UX first. PagePile is the cheapest of them: `GET pagepile.toolforge.org/api.php?action=get_data&id=<id>` is a **fixed host with a numeric id** (verified 2026-10-14), so it is a bounded fetch — unlike a user-supplied `?listurl=`, which was refused as an open-fetch/SSRF risk (`MEMO-url-parameters-2026-10-14.md`) | A cap-and-confirm interaction is designed (roadmap) |
 | Browser hotlinks result thumbnails | Proxy every thumbnail through the app | Saves the app's bandwidth; the images are public Commons thumbnails | A deployment must be fully server-origin or offline-capable |
 
 ## 10. Success metrics
@@ -253,7 +254,10 @@ Downloads for later photos run in a background thread while the model answers fo
 **Next**
 - Report candidate spread for each run (range and ordering among plausible candidates).
 - Validation run: 12+ portraits, today's wording vs the two-option `choice` vs the composite.
-- `Category:` / PetScan / SPARQL input with an explicit cap and confirmation step.
+- `Category:` / PetScan / SPARQL / **PagePile ID** input with an explicit cap and confirmation step.
+  PagePile (F17) is the least work of the four and the most shareable: one fixed-host call with a
+  numeric id returns a title list, and the shape is the one already proven for `?list=` — prefill
+  the box, then let a human press *Validate files* rather than starting anything by itself.
 - Run history + run-to-run comparison (needs a small store).
 - Thumbnail proxy + local cache option for fully server-origin deployments.
 - Server-sent events instead of 1 s polling (nicer clocks, less chatter).

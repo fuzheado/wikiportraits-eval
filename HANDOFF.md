@@ -391,9 +391,12 @@ and a public tool should not be the thing that load-tests it.
    any question change needs a 12+ portrait run and hand labels first.
 
 **Medium**
-6. **`Category:` / PetScan / SPARQL input** with an explicit member cap and a confirmation step
-   ("Category:Foo has 1,240 files; score the first 200?"). The parser already warns instead of
-   guessing; this needs the UX, not the API work.
+6. **`Category:` / PetScan / SPARQL / PagePile input** with an explicit member cap and a confirmation
+   step ("Category:Foo has 1,240 files; score the first 200?"). The parser already warns instead of
+   guessing; this needs the UX, not the API work. **PagePile first** (PRD F17): it is one fixed-host
+   call with a numeric id (`pagepile.toolforge.org/api.php?action=get_data&id=<id>`), which is why it
+   is acceptable where a user-supplied `?listurl=` was refused — same feature shape, bounded target.
+   Reuse the `?list=` pattern: prefill the box and let a human press *Validate files*.
 7. **Run history + run-to-run diff** (small SQLite or JSON store): "these 12 photos got worse after
    the file was overwritten / after I changed the schema".
 8. **Server-sent events instead of 1 s polling** — nicer clocks, less chatter; the incremental
@@ -471,6 +474,14 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
   under "Task Specific models"), caps, the rate-limit tiers, the one published benchmark, and the
   "experimental, no SLA" caveat. **It changed on 2026-10-13 05:12 UTC**, hours before the slowdown
   began; that is a coincidence worth checking, not evidence.
+- **Where future ideas live** (asked 2026-10-14). A **feature or idea** belongs in `PRD.md`: §5 is the
+  numbered requirement list with a status column, §13 the roadmap (Now / Next / Later), §9 the decision
+  plus *what would reopen it*, §12 unresolved questions. The **next thing to do** belongs in §7 of this
+  file, ranked, with the trap that makes it worth doing; §8 is known gaps with no plan. A **research
+  question** with measurements belongs in `research/` (dated), and a finished investigation with options
+  belongs in a `MEMO-*.md`. In one line: PRD is *what and why*, this file is *what will bite you and
+  what next*. Cross-link them — a roadmap item here should name its requirement there (e.g. PagePile =
+  F17 = §7.6).
 - **Model card:** `huggingface.co/Cloudflare/clef-flash` — the authoritative wording for `noul`
   ("the probability of true"), `choice`, `score`, `criteria` and `legend`. Quote it rather than
   paraphrasing.

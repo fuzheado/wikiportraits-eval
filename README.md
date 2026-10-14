@@ -124,6 +124,24 @@ https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&check=1
 - Caps: links longer than ~4,000 characters are refused, and the input check is never run
 automatically for more than 50 entries. The server keeps its own limits regardless of the URL.
 
+## HTTP API
+
+Everything the page does is also available programmatically (also documented in the **About**
+panel, generated live from the code):
+
+```bash
+POST /api/parse  '{"text": "Foo.jpg\nBar.jpg"}'              # resolve + metadata, no scoring
+POST /api/eval   '{"files": ["File:A.jpg", "File:B.jpg"]}'   # blocked; final ranked results (≤ EVAL_MAX)
+POST /api/run    '{"text": …}'                               # async; poll GET /api/job/<id>
+                 # add "no_cache": true to re-score every photo instead of reusing saved answers
+GET  /api/default-list                                        # the sample list (default_list.txt)
+GET  /api/job/<id>/report.{md,json,csv,pdf}                   # reports for a finished job
+                 # report.pdf?view=pose exports the by-pose chart rather than the combined one
+```
+
+`/api/eval` returns `results[]` (composite, P(publish), per-question probabilities, pose, quality,
+licence, Commons link), the run's `spread` and `stats`, and links to the four reports.
+
 ## What the numbers mean
 
 Six questions are asked in one pass; the model generates no text, it returns probabilities. Three
@@ -253,21 +271,6 @@ with a small gap between calls, stops when the server says 429, and caches every
 `(wiki, pageid, sha1, schema, width)` — re-scoring a photo you have already scored costs nothing, and
 re-uploading a file invalidates its cache entry automatically.
 
-## HTTP API
-
-Everything the page does is also available programmatically (also documented in the **About**
-panel, generated live from the code):
-
-```bash
-POST /api/parse  '{"text": "Foo.jpg\nBar.jpg"}'              # resolve + metadata, no scoring
-POST /api/eval   '{"files": ["File:A.jpg", "File:B.jpg"]}'   # blocked; final ranked results (≤ EVAL_MAX)
-POST /api/run    '{"text": …}'                               # async; poll GET /api/job/<id>
-GET  /api/job/<id>/report.{md,json,csv,pdf}                   # reports for a finished job
-```
-
-`/api/eval` returns `results[]` (composite, P(publish), per-question probabilities, pose, quality,
-licence, Commons link), the run's `spread` and `stats`, and links to the four reports.
-
 ## Reports
 
 Markdown, JSON, CSV and PDF — downloadable while a run is still going (they cover whatever has
@@ -327,8 +330,14 @@ hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
   alternatives and what would reopen them), risks, roadmap.
 - **`HANDOFF.md`** — for whoever maintains or extends this next: invariants, traps, measured
   numbers, and the queue of improvements.
-- **`research/`** — the question-design pilot (2026-10-13): write-up, raw answers, chart. Read this
-  before changing any question wording.
+- **`MEMO-*.md`** — a finished investigation with options and a recommendation, written for a
+  specific reader: `MEMO-url-parameters-2026-10-14.md` (the `?list=` design, including what was
+  deliberately refused) and `MEMO-toolforge-skills-2026-10-14.md` (corrections for the Toolforge
+  skill docs upstream). **Where an idea goes:** a feature belongs in `PRD.md` (requirements §5,
+  roadmap §13, decisions §9), the next thing to do in `HANDOFF.md` §7.
+- **`research/`** — the question-design pilot (2026-10-13): write-up, raw answers, chart, plus a dated
+  copy of the Wikitech rate-limit and benchmark sections. Read this before changing any question
+  wording.
 
 Model: `clef-flash` 9.41 B (Apache-2.0, Cloudflare), served by the Wikimedia Foundation on
 [LiftWing](https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models) —
