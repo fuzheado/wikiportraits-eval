@@ -714,7 +714,8 @@ def about_payload() -> dict:
            "gives the range, the median gap, the dead-zone share and the leading file names. The "
            "chart below the run plots the composite for every photo, and its <b>by pose</b> view puts "
            "each pose in its own labelled stratum on the same axis, so you can compare photos within "
-           "a pose. Rank numbers stay global in both views.</p>"
+           "a pose. Rank numbers stay global in both views. The <b>PDF report exports whichever "
+           "view you are looking at</b> — its chart switches with the same control.</p>"
            "<p>So each run reports, per headline number:</p><ul>"
            "<li><b>candidates</b> — how many photos score at or above the candidate floor "
            f"(<code>{CANDIDATE_FLOOR}</code>, set by <code>CANDIDATE_FLOOR</code>);</li>"
@@ -834,7 +835,9 @@ def _read_static(fname):
         return ctype, fh.read()
 
 
-def route(method: str, path: str, body: bytes = b"") -> tuple:
+def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
+    """Dispatch one request. `path` is already stripped of its query string by the caller; `query`
+    is passed separately so the few routes that care can read it (`report.pdf?view=pose`)."""
     """Return (status, content_type, payload_bytes, extra_headers)."""
     def js(obj, code=200):
         return code, "application/json", json.dumps(obj, ensure_ascii=False).encode(), {}
@@ -875,7 +878,7 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
                 if not job:
                     return js({"error": "no such job"}, 404)
                 if len(parts) == 4 and parts[3].startswith("report."):
-                    return _report(job, parts[3].split(".")[1])
+                    return _report(job, parts[3].split(".")[1], query)
                 return js(dict(job) | {"budget": BUDGET.status(), "latency": latency_summary(job)})
             return js({"error": "not found"}, 404)
 
@@ -973,9 +976,13 @@ def _eval_row(item: dict) -> dict:
             "wall_s": (item.get("result") or {}).get("wall_s")}
 
 
-def _report(job, fmt):
+def _report(job, fmt, query=""):
+    # The PDF's chart follows the view the reader had on screen; only the PDF takes a parameter, so
+    # nothing else about the report changes. Parsed by hand rather than with a form decoder.
+    chart_view = "pose" if "view=pose" in (query or "") else "combined"
     meta = {"state": STATE, "questions": QUESTIONS, "elapsed_s": job.get("elapsed_s"),
             "latency": latency_summary(job), "spread": job.get("spread"),
+            "chart_view": chart_view,
             "no_cache": bool(job.get("no_cache")),
             "pdf_path": os.path.join(CACHE_DIR, f"report-{job['id']}.pdf")}
     name = f'filename="wikiportraits-{job["id"]}.{fmt}"'
@@ -990,6 +997,6 @@ def _report(job, fmt):
                 reports.build_json(job["items"], meta).encode(),
                 {"Content-Disposition": "attachment; " + name})
     if fmt == "pdf":
-        return (200, "application/pdf", reports.build_pdf(job["items"], meta),
+        return (200, "application/pdf", reports.build_pdf(job["items"], meta, chart_view=chart_view),
                 {"Content-Disposition": "attachment; " + name})
     return 400, "application/json", json.dumps({"error": "unknown format"}).encode(), {}

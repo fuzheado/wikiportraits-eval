@@ -845,8 +845,15 @@ $("run").onclick = async () => {
   clearInterval(timer); timer = setInterval(poll, 1000); poll();
 };
 
+// The PDF's chart follows whatever view is on screen, so a reader who switched to "by pose"
+// exports the strata they were looking at. Only the PDF takes a parameter; the other three
+// formats are unaffected.
 ["md", "json", "csv", "pdf"].forEach(f => {
-  $("dl-" + f).onclick = () => { if (jobId) window.location = `/api/job/${jobId}/report.${f}`; };
+  $("dl-" + f).onclick = () => {
+    if (!jobId) return;
+    const q = (f === "pdf" && chartMode === "pose") ? "?view=pose" : "";
+    window.location = `/api/job/${jobId}/report.${f}${q}`;
+  };
 });
 
 fetch("/api/config").then(r => r.json()).then(c => {

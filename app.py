@@ -27,7 +27,8 @@ class Handler(BaseHTTPRequestHandler):
     def _respond(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n else b""
-        status, ctype, payload, extra = core.route(self.command, urlparse(self.path).path, body)
+        status, ctype, payload, extra = core.route(self.command, urlparse(self.path).path, body,
+                                                    urlparse(self.path).query)
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(payload)))

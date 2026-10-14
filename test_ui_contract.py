@@ -87,6 +87,8 @@ required = {
     "deep links press Check inputs, never Score them":
         '$("check").click()' in js and '$("run").click()' not in js,
     "deep links have a hard length cap": 'URL_LIST_HARD_MAX' in js,
+    # the exported PDF chart must follow the on-screen view, so the download URL carries it
+    "the PDF export carries the chart view": 'view=pose' in js and 'chartMode' in js,
     "rows are created once (keyed map)": "const rows = new Map()" in js and "rowFor(" in js,
     "statuses: downloading + ready": '"downloading thumbnail"' in js and "ready · queued" in js,
     "per-row scoring clock": 'class="clock"' in js and "data-start" in js and "setInterval(" in js,

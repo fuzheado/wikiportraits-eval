@@ -6,6 +6,7 @@ No network and no PIL: the test image is a PNG built by hand, so it runs anywher
 """
 import io
 import os
+import re
 import struct
 import sys
 import zlib
@@ -140,6 +141,50 @@ ok(len(data) > 4000, f"PDF is a plausible size ({len(data)} bytes)")
 ok(reports.__dict__.get("_thumb_bytes") is not None, "thumb bytes helper exists")
 ok(os.path.exists(out) and os.path.getsize(out) == len(data), "PDF written to disk")
 print(f"  pdf: {len(data)} bytes, {data.count(b'/Subtype /Image')} image object(s)")
+
+
+# --- the PDF chart follows the view the reader had on screen (?view=pose) ----------------------
+def pdf_text(blob: bytes) -> str:
+    """Every string drawn in the PDF, joined with spaces.
+
+    pdfmin writes text as `(escaped) Tj` in an *uncompressed* content stream, and `_wrap()` breaks
+    long captions across several runs — so a plain `in data` test on a phrase that happens to span a
+    line break fails for the wrong reason (that mistake was made once already). Joining the runs
+    restores the phrases without needing a PDF library.
+    """
+    out = []
+    for m in re.finditer(rb"\(((?:\\.|[^()\\])*)\)\s*Tj", blob):
+        s = m.group(1).replace(b"\\(", b"(").replace(b"\\)", b")").replace(b"\\\\", b"\\")
+        out.append(s.decode("latin-1"))
+    return " ".join(out)
+
+
+# one photo per pose, so both charts and the strata are exercised
+posed = [item(f"File:{p}.jpg", 30 + n, answers(), thumb_file=img_path, status="done")
+         for n, p in enumerate(["head_shoulders", "head_shoulders", "three_quarter", "full_body",
+                                "group", "candid"])]
+for n, it in enumerate(posed):
+    it["composite"] = 0.2 + 0.1 * n
+    it["result"]["answers"]["pose"]["choice"] = it["title"].split(":")[1].split(".")[0]
+
+combined = pdf_text(reports.build_pdf(posed, {"spread": {}, "pdf_path": out, "elapsed_s": 1},
+                                     chart_view="combined"))
+strata = pdf_text(reports.build_pdf(posed, {"spread": {}, "pdf_path": out, "elapsed_s": 1},
+                                   chart_view="pose"))
+ok("Composite by photo" in combined and "thumbs stack" in combined,
+   "the default PDF chart is the combined one")
+ok("Composite by photo, by pose" in strata and "one stratum per pose" in strata,
+   "?view=pose gives the PDF the by-pose chart")
+ok("head & shoulders" in strata,
+   "the PDF strata carry the pose names a reader can match to the screen")
+ok("head & shoulders" not in combined,
+   "and the combined chart draws no pose strata (the label exists only in the strata view)")
+ok(all(x in strata for x in ("three-quarter", "full body", "group", "candid")),
+   "every pose gets a labelled band, empty ones included")
+ok("one stratum per pose" not in combined and "thumbs stack" not in strata,
+   "the two views are not mixed up")
+ok(pdf_text(reports.build_pdf(posed, {"spread": {}, "pdf_path": out, "elapsed_s": 1})) == combined,
+   "chart_view defaults to the combined chart (no parameter, same report)")
 
 print(f"\nFAILURES: {len(FAIL)}")
 for f in FAIL:

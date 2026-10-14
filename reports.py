@@ -281,9 +281,18 @@ def build_json(items: list, meta: dict) -> str:
     }, indent=1, ensure_ascii=False)
 
 
-def _pdf_chart(doc, items):
+POSE_ORDER = ["head_shoulders", "three_quarter", "full_body", "group", "candid"]
+POSE_SHORT = {"head_shoulders": "head & shoulders", "three_quarter": "three-quarter",
+              "full_body": "full body", "group": "group", "candid": "candid"}
+
+
+def _pdf_chart(doc, items, by_pose=False):
     """The composite-distribution chart, as in the web UI: thumbnails plotted along a
-    0 → best+headroom axis, stacked into lanes when they would overlap.
+    0 -> best+headroom axis, stacked into lanes when they would overlap.
+
+    `by_pose` draws the same axis once per pose, in labelled strata (the web UI's "by pose"
+    view), so the best and worst photo *within* a pose can be seen. Rank badges are global to
+    the run in both views, matching the web UI and the tables.
 
     The same thumbnail bytes as the per-image cards, registered once per unique image and
     repositioned on the axis — so a charted photo costs no extra embed.
@@ -296,39 +305,25 @@ def _pdf_chart(doc, items):
     LANES_MAX = 4
     maxc = composite(done[-1])
     top = min(1.0, math.ceil((maxc * 1.1 + 0.02) * 10) / 10)   # one-decimal ceiling w/ headroom
-    lanes, placed = [], []
-    for it in done:
-        x = MARGIN + (composite(it) / top) * CONTENT_W
-        lane = 0
-        while (lane < LANES_MAX and lane < len(lanes)
-               and abs(x - lanes[lane]) < TW + GAP):
-            lane += 1
-        if lane == len(lanes):
-            lanes.append(x)
-        else:
-            lanes[lane] = x
-        placed.append((it, x, lane))
-    max_lane = max(l for _, _, l in placed)
-    # reserve, above the axis: lane*ROW per lane + one lane's content (score 4 + gap 9 +
-    # thumb ≤60 + rank 8 ≈ 81 ≤ ROW); below the axis: tick labels. Keeps stacked thumbs from
-    # ever reaching the heading above.
-    doc._need(max_lane * ROW + 84 + 34)
-    doc.text("Composite by photo", size=11, bold=True)
-    doc.small(f"axis 0 → {top:.1f} (best photo {maxc:.3f}) · our arithmetic, min(face, eyes) × "
-              f"pose weight — not a model probability · thumbs stack when they would overlap")
-    doc.spacer(4)
-    y_axis = doc.y - (max_lane * ROW + 84)
-    doc.line_at(MARGIN, y_axis, MARGIN + CONTENT_W, y_axis, color=(0.25, 0.29, 0.35), w=1.0)
-    v = 0.0
-    while v <= top + 1e-9:
-        x = MARGIN + (v / top) * CONTENT_W
-        doc.line_at(x, y_axis, x, y_axis - 4)
-        doc.text_at(f"{v:.1f}", x - 8, y_axis - 13, size=6)
-        v = round(v + 0.1, 10)
-    # register each unique thumbnail once, reuse the name for its position on the axis
-    reg = {}
-    rank = len(done)
-    for it, x, lane in placed:                   # done is ascending: first placed is last rank
+    reg = {}                                     # unique thumbnails, embedded once each
+
+    def place(group, x0, w):
+        """Put one group's thumbs on the shared axis, stacking into lanes when they overlap."""
+        lanes, out = [], []
+        for it in group:
+            x = x0 + (composite(it) / top) * w
+            lane = 0
+            while lane < LANES_MAX and lane < len(lanes) and abs(x - lanes[lane]) < TW + GAP:
+                lane += 1
+            if lane == len(lanes):
+                lanes.append(x)
+            else:
+                lanes[lane] = x
+            out.append((it, x, lane))
+        return out
+
+    def draw_thumb(it, x, bottom, rank):
+        """One thumbnail with its rank badge above and its score just below."""
         data = _thumb_bytes(it)
         name = None
         if data:
@@ -336,24 +331,101 @@ def _pdf_chart(doc, items):
             if key not in reg:
                 reg[key] = doc.add_image(data, label=label(it))
             name = reg[key]
-        score_y = y_axis + 4 + lane * ROW        # score under the thumb, inside its lane, so
-        thumb_bottom = score_y + 9               # stacked lanes never collide with each other
         if name:
-            w, h = doc.image(name, x - TW / 2, thumb_bottom, TW, TH)
-            doc.text_at(f"#{rank}", x - 6, thumb_bottom + h + 1.5, size=6, bold=True)
+            _w, h = doc.image(name, x - TW / 2, bottom, TW, TH)
+            doc.text_at(f"#{rank}", x - 6, bottom + h + 1.5, size=6, bold=True)
         else:                                    # no bytes: an empty slot, still visibly placed
-            for x1, y1, x2, y2 in ((x - TW / 2, thumb_bottom, x + TW / 2, thumb_bottom),
-                                   (x - TW / 2, thumb_bottom + TH, x + TW / 2, thumb_bottom + TH),
-                                   (x - TW / 2, thumb_bottom, x - TW / 2, thumb_bottom + TH),
-                                   (x + TW / 2, thumb_bottom, x + TW / 2, thumb_bottom + TH)):
+            for x1, y1, x2, y2 in ((x - TW / 2, bottom, x + TW / 2, bottom),
+                                   (x - TW / 2, bottom + TH, x + TW / 2, bottom + TH),
+                                   (x - TW / 2, bottom, x - TW / 2, bottom + TH),
+                                   (x + TW / 2, bottom, x + TW / 2, bottom + TH)):
                 doc.line_at(x1, y1, x2, y2, color=(0.78, 0.82, 0.87))
-            doc.text_at(f"#{rank}", x - 6, thumb_bottom + TH + 1.5, size=6, bold=True)
-        doc.text_at(f"{composite(it):.3f}", x - 11, score_y, size=6.5)
-        rank -= 1
-    doc.y = y_axis - 18
+            doc.text_at(f"#{rank}", x - 6, bottom + TH + 1.5, size=6, bold=True)
+        doc.text_at(f"{composite(it):.3f}", x - 11, bottom - 9, size=6.5)
 
+    ranks = {}                                   # done is ascending, so the last one is rank 1
+    for i, it in enumerate(done):
+        ranks[id(it)] = len(done) - i
 
-def build_pdf(items: list, meta: dict) -> bytes:
+    if not by_pose:
+        placed = place(done, MARGIN, CONTENT_W)
+        max_lane = max(l for _, _, l in placed)
+        # reserve, above the axis: lane*ROW per lane + one lane's content (score 4 + gap 9 +
+        # thumb <=60 + rank 8 <= 81 <= ROW); below the axis: tick labels. Keeps stacked thumbs
+        # from ever reaching the heading above.
+        doc._need(max_lane * ROW + 84 + 34)
+        doc.text("Composite by photo", size=11, bold=True)
+        doc.small(f"axis 0 -> {top:.1f} (best photo {maxc:.3f}) · our arithmetic, min(face, eyes) × "
+                  f"pose weight — not a model probability · thumbs stack when they would overlap")
+        doc.spacer(4)
+        y_axis = doc.y - (max_lane * ROW + 84)
+        doc.line_at(MARGIN, y_axis, MARGIN + CONTENT_W, y_axis, color=(0.25, 0.29, 0.35), w=1.0)
+        v = 0.0
+        while v <= top + 1e-9:
+            x = MARGIN + (v / top) * CONTENT_W
+            doc.line_at(x, y_axis, x, y_axis - 4)
+            doc.text_at(f"{v:.1f}", x - 8, y_axis - 13, size=6)
+            v = round(v + 0.1, 10)
+        for it, x, lane in placed:
+            draw_thumb(it, x, y_axis + 4 + lane * ROW + 9, ranks[id(it)])
+        doc.y = y_axis - 18
+        return
+
+    # ---- by pose: one labelled stratum per pose, on a shared axis --------------------------
+    LABEL_W = 78.0
+    x0, w = MARGIN + LABEL_W, CONTENT_W - LABEL_W
+
+    def bucket(it):
+        c = pose(it)
+        return c if c in POSE_ORDER else "other"
+
+    groups = []
+    for key in POSE_ORDER + ["other"]:
+        g = [it for it in done if bucket(it) == key]
+        if key == "other" and not g:
+            continue
+        placed = place(g, x0, w)
+        max_lane = max((l for _, _, l in placed), default=-1)
+        # an empty pose still gets a band, but a thin one: the axis stays stable across runs
+        # without a half-page of white space
+        height = (max_lane * ROW + 4 + 9 + TH + 12) if g else 22.0
+        groups.append({"key": key, "n": len(g), "placed": placed, "height": height})
+    total = sum(g["height"] for g in groups)
+
+    doc._need(total + 34)
+    doc.text("Composite by photo, by pose", size=11, bold=True)
+    doc.small(f"axis 0 -> {top:.1f} (best photo {maxc:.3f}) · our arithmetic, min(face, eyes) × "
+              f"pose weight — not a model probability · one stratum per pose, in the order the "
+              f"pose question lists them; rank badges stay global to the run")
+    doc.spacer(4)
+
+    chart_bottom = doc.y - total
+    y_top = chart_bottom + total
+    # gridlines first, so the bands and thumbnails draw over them
+    v = 0.0
+    while v <= top + 1e-9:
+        x = x0 + (v / top) * w
+        doc.line_at(x, chart_bottom, x, y_top, color=(0.87, 0.89, 0.92))
+        v = round(v + 0.1, 10)
+    y = y_top
+    for g in groups:
+        floor = y - g["height"]                 # thumbnails and the score sit on this line
+        doc.line_at(x0, floor, x0 + w, floor, color=(0.78, 0.82, 0.87), w=0.6)
+        doc.text_at(POSE_SHORT.get(g["key"], "other"), MARGIN, y - 9, size=6.5, bold=True)
+        doc.text_at(str(g["n"]) if g["n"] else "—", MARGIN + 56, y - 9, size=6)
+        for it, x, lane in g["placed"]:
+            draw_thumb(it, x, floor + 4 + lane * ROW + 9, ranks[id(it)])
+        y = floor
+    doc.line_at(x0, chart_bottom, x0 + w, chart_bottom, color=(0.25, 0.29, 0.35), w=1.0)
+    v = 0.0
+    while v <= top + 1e-9:
+        x = x0 + (v / top) * w
+        doc.line_at(x, chart_bottom, x, chart_bottom - 4)
+        doc.text_at(f"{v:.1f}", x - 8, chart_bottom - 13, size=6)
+        v = round(v + 0.1, 10)
+    doc.y = chart_bottom - 18
+
+def build_pdf(items: list, meta: dict, chart_view: str = "combined") -> bytes:
     st = stats(items)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     doc = PDF(title="WikiPortraits Eval report", subtitle=ts)
@@ -403,7 +475,7 @@ def build_pdf(items: list, meta: dict) -> bytes:
     for l in lines:
         doc.text(l, size=9)
     doc.spacer(6)
-    _pdf_chart(doc, items)
+    _pdf_chart(doc, items, by_pose=(chart_view == "pose"))
     doc.spacer(8)
     doc.h2("All images, ranked by composite")
     widths = [14, 128, 44, 44, 40, 44, 34, 36, 32]

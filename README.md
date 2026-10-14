@@ -77,6 +77,8 @@ with the model's exact questions shown to you.
    the best and worst photo *within* a pose rather than only across the whole run (rank numbers stay
    global, so #3 means the same photo in both views). **thumbnail size** scales the chart for a
    projector or a phone.
+   **The PDF export follows this choice** — with *by pose* selected, the
+   report's chart is the same labelled strata rather than the combined axis.
 
    The run's own numbers are two one-line strips under the title — **Scores** (including mean quality)
    and **Time & tokens** — and the **candidate spread** panel is a one-line summary you can expand when
@@ -281,8 +283,10 @@ finished so far), and every one of them **shows the photo next to its evaluation
   determinations.
 - **PDF** — the same, with each photo embedded as a real image (JPEG passthrough, PNG decoded) in a
   card beside its numbers, **plus the composite-distribution chart**: every photo's thumbnail plotted
-  on a 0 → best-score axis, stacked when they would overlap — the same picture the web UI shows. Self-contained: no external assets, so it looks the same wherever it is
-  opened.
+  on a 0 → best-score axis, stacked when they would overlap — the same picture the web UI shows,
+  **and the same view you were looking at**: with the chart switched to *by pose*, the exported
+  chart is the labelled pose strata instead. Self-contained: no external assets, so it looks the
+  same wherever it is opened.
 - **JSON** — everything, including the raw answers, the composite, the served thumbnail width
   (`served_w`) and the run's spread.
 - **CSV** — one row per photo with `composite` and `P_publish` columns, for spreadsheets.

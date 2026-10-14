@@ -17,7 +17,7 @@ def app(environ, start_response):
         length = 0
     body = environ["wsgi.input"].read(length) if length else b""
 
-    status, ctype, payload, extra = core.route(method, path, body)
+    status, ctype, payload, extra = core.route(method, path, body, environ.get("QUERY_STRING", ""))
     headers = [("Content-Type", ctype), ("Content-Length", str(len(payload))),
                ("Cache-Control", "no-store")]
     headers += list((extra or {}).items())
