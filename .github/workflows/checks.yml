@@ -42,6 +42,7 @@ jobs:
           python3 test_reports.py
           python3 test_thumb_width.py
           python3 test_default_list.py
+          python3 test_privacy.py
           python3 check_docs.py
           python3 check_compat.py
           python3 check_memo_refs.py

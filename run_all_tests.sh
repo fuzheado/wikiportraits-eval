@@ -18,7 +18,14 @@ run "test_pipeline.py"     python3 test_pipeline.py
 run "test_reports.py"      python3 test_reports.py
 run "test_thumb_width.py"  python3 test_thumb_width.py
 run "test_default_list.py" python3 test_default_list.py
-run "check_pdf.py"         python3 check_pdf.py
+run "test_privacy.py"     python3 test_privacy.py
+# check_pdf.py needs pypdf, which only the dev venv has (see HANDOFF §2). Skip loudly rather than
+# reporting a failure that is not one — a runner whose output cannot be trusted gets ignored.
+if [ -x .venv-pdf/bin/python ]; then
+  run "check_pdf.py"       .venv-pdf/bin/python check_pdf.py
+else
+  printf '%-28s %s\n' "check_pdf.py" "SKIPPED (no .venv-pdf — needs pip install pypdf)"
+fi
 run "check_js.py"          python3 check_js.py
 run "check_docs.py"        python3 check_docs.py
 run "check_compat.py"      python3 check_compat.py

@@ -23,8 +23,8 @@ fi
 
 fail=0
 for t in test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py \
-         test_thumb_width.py test_default_list.py check_js.py check_docs.py check_compat.py \
-         check_memo_refs.py; do
+         test_thumb_width.py test_default_list.py test_privacy.py check_js.py check_docs.py \
+         check_compat.py check_memo_refs.py; do
   if ! out=$(python3 "$t" 2>&1); then
     echo "pre-commit: $t FAILED"
     printf '%s\n' "$out" | tail -20

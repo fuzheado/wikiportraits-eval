@@ -58,7 +58,9 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged. If a
    previous run's results are on screen, you are asked first — starting a new run clears them. Once
    the list resolves, the blue highlight moves off this button and onto **Score them**, so the next
-   step is the obvious one; editing the list moves it back.
+   step is the obvious one; editing the list moves it back. The pill also states the cost —
+   *12 of 12 resolved · up to 12 model calls* — and the budget line beside it shows the hour's
+   running total.
 3. **Score them** — tick **run fresh** if you want the answers re-computed instead of reusing the
    ones already saved (that is the honest way to judge speed: one model call per photo). The app
    first sends a **tiny text-only pre-flight question** to the endpoint
@@ -89,7 +91,10 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    The run's own numbers are two one-line strips under the title — **Scores** (including mean quality)
    and **Time & tokens** — and the **candidate spread** panel is a one-line summary you can expand when
    you want the ranges, dead-zone shares and leading file names.
-5. **Download** the Markdown/JSON/CSV/PDF report, or read the cards on screen.
+5. **Keep or hand on the result** — download the Markdown/JSON/CSV/PDF report, read the cards on
+   screen, or use the two buttons under them: **Copy share link** (one URL that reproduces this run
+   from saved answers) and **Copy API link** (a `curl` command that evaluates the same list through
+   the HTTP API).
 
 ### Forms you can paste
 
@@ -341,6 +346,7 @@ python3 test_reports.py      # composite, P(publish), spread, thumbnails in MD/P
 python3 test_thumb_width.py  # served width, ladder steps, cache keying (offline)
 python3 test_default_list.py # the starter list + the "run fresh" flag (offline)
 python3 test_default_list.py --live      # live: 1 batched Commons call, 0 model calls
+python3 test_privacy.py      # the request log: no query, no IP, no UA (offline)
 python3 check_js.py          # the inline script still parses (offline)
 python3 check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
 .venv-pdf/bin/python test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)

@@ -16,10 +16,11 @@ App version 0.15.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 
 | `wiclient.py` | input parsing → `File:` titles, per-wiki Commons API resolution, thumbnail fetch, model call, budget/pacing |
 | `reports.py`, `pdfmin.py` | Markdown/JSON/CSV/PDF output; `pdfmin.py` is a dependency-free PDF writer |
 | `static/index.html` | the whole UI: incremental list rendering, per-row clock, latency panel, About modal |
-| | *Deep links:* `?list=` (newline-separated paste text, `%0A`) prefills; `&check=1` also presses Validate files, capped at 50 entries; `&run=1` starts a **cache-only replay** (never spends); `&view=pose|combined` reproduces the chart view. The read-only API twin is `GET /api/eval?list=…`, which returns the same ranked JSON with **no model calls at all** (unscored photos come back as `uncached`); `POST /api/eval` is the one that scores. A GET that scores is refused on purpose — it would fire from link previews, crawlers and refreshes. The UI's **Copy share link** builds exactly this URL from a finished run. Over ~4,000 chars is refused. Never starts a run; params are stripped via `replaceState` so a reload cannot replay them. Caps are client-side only because the server caps independently (`PARSE_MAX`, `MAX_INPUT_ITEMS`) and never sees the query string. |
+| | *Deep links:* `?list=` (newline-separated paste text, `%0A`) prefills; `&check=1` also presses Validate files, capped at 50 entries; `&run=1` starts a **cache-only replay** (never spends); `&view=pose\|combined` reproduces the chart view. The read-only API twin is `GET /api/eval?list=…`, which returns the same ranked JSON with **no model calls at all** (unscored photos come back as `uncached`); `POST /api/eval` is the one that scores. A GET that scores is refused on purpose — it would fire from link previews, crawlers and refreshes. The UI's **Copy share link** builds exactly this URL from a finished run. Over ~4,000 chars is refused. Never starts a run; params are stripped via `replaceState` so a reload cannot replay them. Caps are client-side only because the server caps independently (`PARSE_MAX`, `MAX_INPUT_ITEMS`) and never sees the query string. |
 | | *Section 2 is deliberately compact* (a 2026-10-14 report: "section 2 reads very busy and is overwhelming"). The run stats are **two one-line strips** — `Scores` (with `mean quality` folded in) and `Time & tokens` — not a grid of big boxes; **candidate spread is a collapsed `<details>`** whose one-liner still carries the candidate counts. Do not reintroduce the box grid or a 22px heading here; `test_render_dom.js` asserts two strips, no `statgroup`, and a closed `<details>`. |
 | | *Chart views:* `chartMode` is `combined` (default) or `pose`; `setChartMode()` persists it in localStorage and re-renders. By-pose gives every pose its own labelled band on a shared x axis with vertical gridlines, so photos can be compared *within* a pose; rank badges stay global so a photo keeps its number in both views. Tests assert 5 strata (empty ones included, as thin labelled lines), that gridlines appear only in pose mode, and that the default has neither. **The PDF export follows the same setting:** the UI appends `?view=pose` to the report URL, `route()` takes a `query` argument (both backends pass it; `path` stays query-free so deep links still route), `_report()` reads it into `meta[chart_view]`, and `reports.build_pdf(..., chart_view=)` draws the strata. Only the PDF takes the parameter; the other three formats ignore it. |
-| | *UI state to keep:* `setStage(idle|checked|running|done)` owns which button is blue and whether **Score them** is enabled — the blue highlight is the only thing telling a first-time user which step is next, and editing the list must send the flow back to `idle`. `test_render_dom.js` asserts the whole cycle. The input box must start empty (invariant 12). |
+| | *Four interactions added 2026-10-14*, each additive and none touching scoring or the cache key: **detail popup** (`openDetail`/`detailHtml`, fed by `renderBody` so a popup and a card can never disagree — opened by *delegation* on `#chart` and `#items`, because both are rebuilt every poll; the anchors carry `data-title` so a click maps back to `lastJob`); **row order** (`rowOrder` = `ranked` \| `input`, persisted in localStorage — in list mode the badge shows the list position and the meta line names the composite rank, so the two numbers stay distinct); **Copy API link** (a chunked `curl` for `POST /api/eval`, split by `configCache.eval_max`, deliberately a command to run rather than a URL); **title → new session** (`resetSession` asks first, then `clearAll()` + empties the box; display preferences are deliberately kept). |
+| | *UI state to keep:* `setStage(idle\|checked\|running\|done)` owns which button is blue and whether **Score them** is enabled — the blue highlight is the only thing telling a first-time user which step is next, and editing the list must send the flow back to `idle`. `test_render_dom.js` asserts the whole cycle. The input box must start empty (invariant 12). |
 | `default_list.txt` | the example list behind the UI's **Load sample list** button — 12 real Commons photos, one `File:` title per line. Served by `/api/default-list`, read at request time, so **replacing the file changes the default for everyone** with no code change. Never pre-loaded into the box (invariant 12). No comment lines: `#` is part of a Commons filename and the parser would treat a comment as a photo name (`test_default_list.py` enforces this). |
 | `docs/screenshot.png` | the README's lead image: a real 12-photo run (the composite-by-photo chart over the ranked cards). Generated by hand from the running app; refresh it when the UI changes shape, since a stale screenshot is worse than none — the one committed here predates the **by pose** toggle that now sits in the chart's control row. |
 | `.githooks/pre-commit` | offline suites on every commit, plus `test_default_list.py --live` **only when `default_list.txt` is staged**. Enable per clone: `git config core.hooksPath .githooks`. Escape hatches: `SKIP_LIVE=1`, `SKIP_HOOKS=1`. |
@@ -29,7 +30,7 @@ App version 0.15.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 
 | `cache/thumbs/` | the exact thumbnail bytes sent to the model, keyed `wiki-pageid-sha1.img` — what the reports embed. Safe to delete (reports then re-fetch from Commons). |
 | `research/` | the question-design experiment: `wording-experiment-2026-10-13.md` (write-up), `wording_experiment.jsonl` (every raw answer), `wording_comparison.png` (chart), `wording_experiment_output.txt` (console log) — plus `sample-report.pdf` / `sample-report.md` / `sample-report-page1.png`, a real report served by the running app over HTTP (one photo, so it can be inspected without running anything) |
 | `PRD.md`, `README.md` | product rationale; user-facing docs |
-| dev scripts | `run_all_tests.sh`, `live_pipeline_check.py`, `verify_reports_live.py`, `verify_live_two.py`, `diag_contract_job.py`, `test_pdf_images.py`, `probe_latency_now.py`, `probe_spread.py`, `probe_thumb_ladder.py`, `analyze_*.py`, `tune_infobox_question.py`, `summarize_wording_experiment.py`, `make_wording_chart.py`, `restart_app.py`, `start_tunnel.py`, `check_docs.py`, `check_js.py`, `package.sh` |
+| dev scripts | `run_all_tests.sh`, `live_pipeline_check.py`, `verify_reports_live.py`, `verify_live_two.py`, `diag_contract_job.py`, `test_pdf_images.py`, `probe_latency_now.py`, `probe_spread.py`, `probe_thumb_ladder.py`, `analyze_*.py`, `tune_infobox_question.py`, `summarize_wording_experiment.py`, `make_wording_chart.py`, `restart_app.py`, `start_tunnel.py`, `check_docs.py`, `check_compat.py`, `check_js.py`, `package.sh` |
 
 Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 restart_app.py`
 (kills by scanning `/proc` — this host has no `lsof`).
@@ -38,7 +39,7 @@ Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 resta
 
 ```bash
 bash run_all_tests.sh                    # everything below, in order
-python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py test_thumb_width.py test_default_list.py check_compat.py   # offline
+python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py test_thumb_width.py test_default_list.py test_privacy.py   # offline
 python3 check_js.py                      # offline: the page script parses (node --check)
 python3 check_compat.py                  # offline: nothing newer than the advertised 3.9 floor
 python3 check_docs.py check_memo_refs.py # offline: docs exist & cite real files (free)
@@ -89,7 +90,10 @@ UI changes.**
    into a keyed `Map` (see `static/index.html`) and patched in place. `test_ui_contract.py` asserts
    `$("items").innerHTML` does not appear in the JS. **That includes the new-run reset:**
    `clearResults()` removes rows with `removeChild`, never by `innerHTML`, so clearing the list cannot
-   re-introduce the reload.
+   re-introduce the reload. **And the row key is identity (`pageid`, else title/raw), never the display
+   index** — the list is re-sorted on every poll as ranks move, so an index in the key made every
+   re-rank recreate rows and re-assign `<img src>` (found 2026-10-14 while adding the row-order toggle;
+   `test_render_dom.js` now proves one `src` assignment survives an order switch).
 4. **Cache keys are `(wiki, pageid, sha1, schema_hash, served_width)`.** Pageids collide across
    wikis; titles are renamed; SHA-1 catches file overwrites; the schema hash invalidates answers when
    the questions change. The width is the **served** one (read from the thumburl), not the requested
@@ -413,6 +417,10 @@ and a public tool should not be the thing that load-tests it.
    every number, and read §13 first: this app is probably the heaviest consumer of a brand-new
    service (**T440223**), so a slow hour is evidence about the *service* — worth handing to the ML
    team on that ticket — rather than something to fix here.
+2b. **Identify the ~1–2 % slow calls.** §4 measured them (4.6–6.8 s, isolated, not shape- or
+   image-keyed, ~166 calls observed) and refuted the "new dimension" explanation, but the mechanism is
+   still unknown — a second/cold backend replica and a gateway stall are the candidates and neither is
+   observable from here. Worth one measurement before anyone optimises the image size again.
 3. **Show the full distribution per photo on demand** — the API already returns the whole probability
    vector; exposing it costs nothing and helps users trust (or distrust) a score.
 4. **Cache persistence on Toolforge** — the deployment runs `--mount=none`, so `cache/` is wiped on
