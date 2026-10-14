@@ -572,6 +572,11 @@ def about_payload() -> dict:
     sections = [
         {"title": "What this app does",
          "html": (
+           "<p><b>WikiPortraits Eval is a tool to help evaluate the quality and usefulness of "
+           "Wikimedia Commons images in illustrating a human-subject portrait</b> — for example when "
+           "choosing which photograph to add to a Wikipedia article. It puts each photo in front of "
+           "a Wikimedia-hosted model, which returns probabilities rather than prose, and ranks them."
+           "</p>"
            "<p>Paste Wikimedia Commons file references (bare names, <code>File:</code> titles, "
            "page URLs, upload/thumbnail URLs, wikitext), and every photo is sent once to "
            "<b>llm-clef-flash</b> — Cloudflare's decision model, served by the Wikimedia "
@@ -580,7 +585,7 @@ def about_payload() -> dict:
            "visible, eyes to camera, pose), and shows the model's own P(publish) and P(infobox) "
            "beside it.</p>"
            "<p><b>How you drive it:</b> the box starts empty — the accepted formats below are shown "
-           "only as a grey hint — so nothing can be scored by accident. Press <b>Load test data</b> "
+           "only as a grey hint — so nothing can be scored by accident. Press <b>Load sample list</b> "
            "to fill it with 12 real Commons photos, or paste your own list. <b>Check inputs</b> "
            "resolves every line against Commons first; <b>Score them</b> then spends one model call "
            "per photo. Starting a new run clears the previous results — after asking, and only when "
@@ -705,6 +710,11 @@ def about_payload() -> dict:
            "on the same four photos every rewrite emptied the 0.35–0.65 band by pushing all the "
            "real portraits to 0.81–0.96, cutting the range between them from 0.486 to as little as "
            "0.021.</p>"
+           "<p>The collapsed line above the numbers carries just the candidate counts; expanding it "
+           "gives the range, the median gap, the dead-zone share and the leading file names. The "
+           "chart below the run plots the composite for every photo, and its <b>by pose</b> view puts "
+           "each pose in its own labelled stratum on the same axis, so you can compare photos within "
+           "a pose. Rank numbers stay global in both views.</p>"
            "<p>So each run reports, per headline number:</p><ul>"
            "<li><b>candidates</b> — how many photos score at or above the candidate floor "
            f"(<code>{CANDIDATE_FLOOR}</code>, set by <code>CANDIDATE_FLOOR</code>);</li>"

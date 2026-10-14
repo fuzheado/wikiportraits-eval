@@ -80,6 +80,24 @@
   .ok{color:var(--green);font-weight:600}
   .clock{font-variant-numeric:tabular-nums}
   .chartbox{position:relative;margin-top:10px;border-bottom:1px solid var(--line)}
+  /* section 2 was overwhelming: headings that read as headings rather than as 22px display text */
+  .h{font-size:13.5px;font-weight:650;color:var(--ink)}
+  /* run stats as one-line strips instead of a grid of big boxes */
+  .strip{display:flex;align-items:baseline;gap:2px 16px;flex-wrap:wrap;border:1px solid var(--line);
+         border-radius:8px;padding:6px 10px;margin-bottom:6px}
+  .strip .shead{font-size:10.5px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;
+                color:var(--muted);min-width:104px}
+  .strip .m{font-size:12px;color:var(--muted);white-space:nowrap}
+  .strip .m b{color:var(--ink);font-size:13px;font-weight:650;font-variant-numeric:tabular-nums}
+  /* pose strata: labels in a parallel column, share the plot's coordinates */
+  .cchart{display:flex;gap:6px;align-items:stretch}
+  .cposes{width:106px;flex:0 0 106px;position:relative;margin-top:10px}
+  .cposes .plabel{position:absolute;right:4px;text-align:right;font-size:11px;color:var(--muted);
+                  line-height:1.2;white-space:nowrap}
+  .cposes .plabel b{display:block;color:var(--ink);font-size:11.5px;font-weight:650}
+  .cgrid{position:absolute;top:0;bottom:20px;width:1px;background:var(--line);opacity:.6}
+  #spreaddetails{margin-top:6px}
+  #spreaddetails summary{cursor:pointer;font-size:12.5px}
   .chartbox .caxis{position:absolute;left:0;right:0;bottom:20px;height:2px;background:var(--ink);opacity:.25}
   .ctick{position:absolute;bottom:0;transform:translateX(-50%);font-size:11px;color:var(--muted);
          font-variant-numeric:tabular-nums}
@@ -157,9 +175,9 @@
       wikitext, mixed freely <span class="meter">(full rules &amp; accepted formats: <b>About</b>,
       section 2)</span></label>
     <textarea id="input" spellcheck="false"
-      placeholder="Foo.jpg&#10;File:Foo.jpg&#10;https://commons.wikimedia.org/wiki/File:Foo.jpg&#10;https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg&#10;&#10;example formats only — this is a hint, not a list. Paste your own, or press “Load test data” for 12 real Commons photos."></textarea>
+      placeholder="Foo.jpg&#10;File:Foo.jpg&#10;https://commons.wikimedia.org/wiki/File:Foo.jpg&#10;https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg&#10;&#10;example formats only — this is a hint, not a list. Paste your own, or press “Load sample list” for 12 real Commons photos."></textarea>
     <div class="row" style="margin-top:10px">
-      <button id="load-test" title="Load the 12 example photos from default_list.txt so you can try a real run">Load test data</button>
+      <button id="load-test" title="Load the 12 sample photos from default_list.txt so you can try a real run">Load sample list</button>
       <button id="check" class="primary">Check inputs</button>
       <button id="run" disabled>Score them</button>
       <label class="meter" id="nocache-label" style="display:flex;align-items:center;gap:6px"
@@ -188,10 +206,13 @@
     <div id="freshness" class="meter" style="margin-top:6px"></div>
     <div id="probe" class="meter" style="margin-top:6px"></div>
     <div id="spread" class="meter" style="margin-top:6px"></div>
-    <div id="stats" class="grid" style="margin-top:14px"></div>
+    <div id="stats" style="margin-top:14px"></div>
     <div id="chart" style="margin-top:14px"></div>
     <div class="row" id="chartsizerow" style="margin-top:8px" hidden>
-      <span class="meter">thumbnail size on the axis:</span>
+      <span class="meter">view:</span>
+      <button id="cm-combined" class="csize" title="one axis with every photo on it">combined</button>
+      <button id="cm-pose" class="csize" title="one stratum per pose, so you can compare photos within a pose">by pose</button>
+      <span class="meter" style="margin-left:10px">thumbnail size:</span>
       <button id="cs-s" class="csize" title="small">S</button>
       <button id="cs-m" class="csize" title="medium">M</button>
       <button id="cs-l" class="csize" title="large">L</button>
@@ -371,57 +392,118 @@ function renderItem(it, i, rank) {
 // end-of-run chart: the photos plotted as mini thumbnails along a composite axis, 0 → the best
 // score plus headroom, so the field's shape is visible at a glance. Thumbs that would overlap are
 // stacked into lanes above the axis. Composite is our arithmetic, not a model probability.
+// ---- the composite chart: one axis, or one stratum per pose -----------------------------------
+// The combined view is the default and the shape it always had. The "by pose" view gives every pose
+// its own band on a shared x axis, which is what lets you compare photos *within* a pose instead of
+// only across the whole run. Rank badges stay global in both, so #3 is the same photo either way.
+const POSE_ROWS = ["head_shoulders", "three_quarter", "full_body", "group", "candid"];
+const POSE_SHORT = {head_shoulders: "head &amp; shoulders", three_quarter: "three-quarter",
+                    full_body: "full body", group: "group", candid: "candid"};
+let chartMode = (function () { try { return localStorage.getItem("wp-chart-mode") || "combined"; }
+                              catch (e) { return "combined"; } })();
+
+function poseBucket(it) {                    // anything unrecognised lands in "other"
+  const c = (((it.result || {}).answers || {}).pose || {}).choice;
+  return POSE_ROWS.indexOf(c) >= 0 ? c : "other";
+}
+function setChartMode(m) {
+  chartMode = m;
+  try { localStorage.setItem("wp-chart-mode", m); } catch (e) {}
+  markChartMode();
+  if (lastJob) renderChart(lastJob);
+}
+function markChartMode() {
+  ["combined", "pose"].forEach(k => {
+    const b = $("cm-" + k); if (b) b.classList.toggle("active", k === chartMode);
+  });
+}
+["combined", "pose"].forEach(k => { const b = $("cm-" + k); if (b) b.onclick = () => setChartMode(k); });
+
 function renderChart(job) {
   const el = $("chart");
   if (!el) return;
   if (job.status !== "done" && job.status !== "error") { el.innerHTML = ""; return; }
   const done = (job.items || []).filter(i => i.status === "done" && i.composite != null)
     .sort((a, b) => a.composite - b.composite);
-  if (!done.length) { el.innerHTML = ""; const rowEl = $("chartsizerow"); if (rowEl) rowEl.hidden = true; return; }
+  const rowEl = $("chartsizerow");
+  if (!done.length) { el.innerHTML = ""; if (rowEl) rowEl.hidden = true; return; }
   const max = done[done.length - 1].composite;
   const top = Math.min(1, Math.ceil((max * 1.1 + 0.02) * 10) / 10);   // one-decimal ceiling w/ headroom
-  el.innerHTML = `<b class="big">composite by photo</b> <span class="meter">axis 0 → ${fmt(top, 1)}
-    (best photo ${fmt(max)}) · our arithmetic, min(face, eyes) × pose weight — not a model probability
-    · thumbs stack when they would overlap</span>
-    <div class="chartbox"><div class="caxis"></div></div>`;
-  const box = el.querySelector(".chartbox");
-  const w = box.clientWidth || 800;
   const Z = CHART_SIZES[chartSize] || CHART_SIZES.m;
   const TW = Z.TW, GAP = 10, ROW = Z.ROW;            // thumb width, min gap, lane height (px)
   const LANES_MAX = 5;
-  const rowEl = $("chartsizerow"); if (rowEl) rowEl.hidden = false;
+  const byPose = chartMode === "pose";
+  if (rowEl) rowEl.hidden = false;
   markChartSize();
-  const lanes = [];                                  // each lane: last x (px) occupied
-  const placed = done.map((it) => {
-    const x = (it.composite / top) * w;
-    let lane = 0;
-    while (lane < LANES_MAX && lanes[lane] != null && Math.abs(x - lanes[lane]) < TW + GAP) lane++;
-    lanes[lane] = x;
-    return {it, x, lane};
-  });
-  const maxLane = Math.max(...placed.map(p => p.lane));
-  // top of the highest thumb = maxLane*ROW + 26 + thumb height + score row; margin so the badge
-  // and image never overlap the heading above
-  box.style.height = (maxLane * ROW + 26 + Z.IMH + 26) + "px";
-  box.insertAdjacentHTML("beforeend", placed.map((p, i) => {
-    const it = p.it;
-    const title = it.title || it.raw || "";
-    const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
-    const rank = done.length - i;                                  // list is ascending; 1 = best
-    return `<a class="cthumb" style="left:${Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0)}px;
-        bottom:${(p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}" target="_blank"
-        rel="noopener" title="${rank}. ${esc(title)} — composite ${fmt(it.composite)}">
-      <span class="crank">${rank}</span>
-      <img src="${it.thumburl || ""}" alt="" loading="lazy" decoding="async"
-           style="width:${Z.IMW}px;max-height:${Z.IMH}px">
-      <span class="cscore">${fmt(it.composite)}</span></a>`;
-  }).join(""));
-  // ticks: 0.1 steps across the axis
+  markChartMode();
+
+  el.innerHTML = `<b class="h">composite by photo</b> <span class="meter">axis 0 → ${fmt(top, 1)}
+    (best photo ${fmt(max)}) · our arithmetic, min(face, eyes) × pose weight — not a model probability
+    · ${byPose ? "one stratum per pose; rank badges stay global" : "thumbs stack when they would overlap"}</span>
+    <div class="cchart">${byPose ? `<div class="cposes"></div>` : ""}
+      <div class="chartbox"><div class="caxis"></div></div></div>`;
+  const box = el.querySelector(".chartbox");
+  const poseCol = el.querySelector(".cposes");
+  const w = box.clientWidth || 800;
+
+  // One group per pose (a single group in the combined view). Thumbs stack into lanes when a
+  // neighbour would overlap, and each group gets its own band of vertical space.
+  const groups = byPose
+    ? POSE_ROWS.concat(["other"])
+        .map((k) => ({key: k, items: done.filter((i) => poseBucket(i) === k)}))
+        .filter((g) => g.items.length || g.key !== "other")
+    : [{key: "", items: done}];
+  let y = 0;
+  for (const g of groups) {
+    const lanes = [];                                // each lane: last x (px) occupied
+    g.placed = g.items.map((it) => {
+      const x = (it.composite / top) * w;
+      let lane = 0;
+      while (lane < LANES_MAX && lanes[lane] != null && Math.abs(x - lanes[lane]) < TW + GAP) lane++;
+      lanes[lane] = x;
+      return {it, x, lane};
+    });
+    g.maxLane = g.placed.length ? Math.max(...g.placed.map((p) => p.lane)) : 0;
+    g.top = y;
+    // an empty stratum is a thin labelled line, so the axis stays stable without wasting height
+    g.height = g.items.length ? (g.maxLane * ROW + 26 + Z.IMH + 26) : 30;
+    y += g.height;
+  }
+  box.style.height = y + "px";
+
+  const rankOf = new Map(done.map((it, i) => [it, done.length - i]));
+  let html = "";
+  for (const g of groups) {
+    for (const p of g.placed) {
+      const it = p.it;
+      const title = it.title || it.raw || "";
+      const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
+      const rank = rankOf.get(it);
+      html += `<a class="cthumb" style="left:${Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0)}px;
+          bottom:${(g.top + p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}"
+          target="_blank" rel="noopener" title="${rank}. ${esc(title)} — composite ${fmt(it.composite)}">
+        <span class="crank">${rank}</span>
+        <img src="${it.thumburl || ""}" alt="" loading="lazy" decoding="async"
+             style="width:${Z.IMW}px;max-height:${Z.IMH}px">
+        <span class="cscore">${fmt(it.composite)}</span></a>`;
+    }
+    if (poseCol && g.key) {
+      poseCol.insertAdjacentHTML("beforeend",
+        `<span class="plabel" style="top:${(g.top + (g.items.length ? 2 : 8)).toFixed(0)}px">`
+        + `<b>${POSE_SHORT[g.key] || "other"}</b>${g.items.length || "—"}</span>`);
+    }
+  }
+  box.insertAdjacentHTML("beforeend", html);
+
+  // vertical gridlines only in the strata view, where they are what makes the layers comparable;
+  // the bottom ticks appear in both
   for (let v = 0; v <= top + 1e-9; v += 0.1) {
-    box.insertAdjacentHTML("beforeend",
-      `<span class="ctick" style="left:${((Math.round(v * 10) / 10) / top * 100).toFixed(2)}%">${v.toFixed(1)}</span>`);
+    const left = ((Math.round(v * 10) / 10) / top * 100).toFixed(2);
+    if (byPose) box.insertAdjacentHTML("beforeend", `<span class="cgrid" style="left:${left}%"></span>`);
+    box.insertAdjacentHTML("beforeend", `<span class="ctick" style="left:${left}%">${v.toFixed(1)}</span>`);
   }
 }
+
 window.addEventListener("resize", () => { if (lastJob) renderChart(lastJob); });
 
 // the metric the run reports: separation among candidates, not standard deviation
@@ -430,15 +512,23 @@ function renderSpread(sp) {
   if (!el) return;
   if (!sp || !sp.composite || !sp.composite.n) { el.innerHTML = ""; return; }
   const one = (name, s) => (s && s.n)
-    ? `<div class="sp"><b>${esc(name)}</b> — ${s.n_candidates}/${s.n} candidates at or above ${s.floor}
+    ? `<div class="sp">${esc(name)} — ${s.n_candidates}/${s.n} candidates at or above ${s.floor}
        · range <b>${fmt(s.candidate_range)}</b> · median gap ${fmt(s.candidate_median_gap)}
        · ${s.dead_zone}/${s.n} (${Math.round((s.dead_zone_share || 0) * 100)}%) in the 0.35–0.65 band
        ${s.top && s.top.length ? ` · leading: ${s.top.map(esc).join(" › ")}` : ""}</div>`
     : "";
-  el.innerHTML = `<b class="big">candidate spread</b> — separation among candidates, not sd:
-    <span class="meter">candidate = score at or above the floor</span>`
+  const lead = (s) => (s && s.n) ? `${s.n_candidates}/${s.n}` : "—";
+  // One line by default: the three headline counts. The ranges, dead-zone shares and leading file
+  // names are a click away, because at a glance they were drowning the numbers that matter.
+  el.innerHTML = `<details id="spreaddetails"><summary><b class="h">candidate spread</b>
+    <span class="meter">candidates at or above ${esc(String(sp.composite.floor))} —
+    composite ${lead(sp.composite)} · P(publish) ${lead(sp.publish_ready)} ·
+    P(infobox) ${lead(sp.infobox_ready)} · expand for range, median gap, dead zone (0.35–0.65) and
+    leading titles</span></summary>`
+    + `<div class="meter" style="margin:4px 0 4px">separation among candidates, not sd:
+       a candidate is any score at or above the floor</div>`
     + one("composite", sp.composite) + one("P(publish)", sp.publish_ready)
-    + one("P(infobox)", sp.infobox_ready);
+    + one("P(infobox)", sp.infobox_ready) + `</details>`;
 }
 
 // stats, grouped so like reads with like: scores together, quality alone, time & tokens together
@@ -463,26 +553,29 @@ function markChartSize() {
 function renderStats(job) {
   const s = job.stats || {};
   if (!s || !s.n_scored) return "";
-  const cell = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="big">${v}</div></div>`;
-  const group = (label, cells) => `<div class="statgroup"><div class="glabel">${label}</div>
-      <div class="statgrid">${cells}</div></div>`;
   const pl = job.pipeline;
   const e = job.elapsed_s;
-  return group("Scores", cell("scored", `${s.n_scored}/${s.n_input}`)
-      + cell("mean composite", fmt(s.composite_mean))
-      + cell("mean P(publish)", fmt(s.p_publish_mean))
-      + cell("mean P(infobox)", fmt(s.p_infobox_mean))
-      + cell("median P(infobox)", fmt(s.p_infobox_median))
-      + cell("max P(infobox)", fmt(s.p_infobox_max))
-      + cell("≥ 0.5 infobox-ready", s.n_above_half))
-    + group("Quality", cell("mean quality /4", fmt(s.quality_mean, 2)))
-    + group("Time & tokens", cell("batch wall", `${fmt(e, 1)}s`)
-      + cell("median call", `${fmt(s.wall_median_s, 2)}s`)
-      + (pl ? cell("downloads", `${pl.download_s}s`) : "")
-      + (pl ? cell("model time", `${pl.model_s}s`) : "")
-      + (pl ? cell("serial est.", `${pl.serial_estimate_s}s`) : "")
-      + (pl && pl.saved_s > 0.05 ? cell("saved by pipeline", `${pl.saved_s}s`) : "")
-      + cell("input tokens", s.tokens_total));
+  const m = (k, v) => `<span class="m">${k} <b>${v}</b></span>`;
+  // Two one-line strips, smaller type, and quality folded in beside the scores (it is a score too).
+  // The old 3-panel grid of big boxes took most of a screen for eleven numbers.
+  return `<div class="strip"><span class="shead">Scores</span>`
+      + m("scored", `${s.n_scored}/${s.n_input}`)
+      + m("mean composite", fmt(s.composite_mean))
+      + m("mean P(publish)", fmt(s.p_publish_mean))
+      + m("mean P(infobox)", fmt(s.p_infobox_mean))
+      + m("median P(infobox)", fmt(s.p_infobox_median))
+      + m("max P(infobox)", fmt(s.p_infobox_max))
+      + m("≥ 0.5 infobox-ready", s.n_above_half)
+      + m("mean quality", `${fmt(s.quality_mean, 2)}/4`)
+      + `</div>`
+    + `<div class="strip"><span class="shead">Time &amp; tokens</span>`
+      + m("batch wall", `${fmt(e, 1)}s`)
+      + m("median call", `${fmt(s.wall_median_s, 2)}s`)
+      + (pl ? m("downloads", `${pl.download_s}s`) + m("model time", `${pl.model_s}s`)
+              + m("serial est.", `${pl.serial_estimate_s}s`) : "")
+      + (pl && pl.saved_s > 0.05 ? m("saved by pipeline", `${pl.saved_s}s`) : "")
+      + m("input tokens", s.tokens_total)
+      + `</div>`;
 }
 
 function renderJob(job) {

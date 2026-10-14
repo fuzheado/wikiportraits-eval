@@ -55,7 +55,7 @@ with the model's exact questions shown to you.
 
 1. **Paste your list** — one photo per line, in almost any form (see below). The box starts **empty**
    with the accepted formats shown as a grey placeholder, so there is nothing runnable in it by
-   accident. Press **Load test data** to fill it with the 12 real Commons portraits from
+   accident. Press **Load sample list** to fill it with the 12 real Commons portraits from
    **`default_list.txt`** (replace that file to change what everyone gets), or paste your own list —
    the placeholder disappears as soon as you click into the box.
 2. **Check inputs** — the tool resolves each line against Commons and shows you what it understood
@@ -70,9 +70,17 @@ with the model's exact questions shown to you.
    answer, the run stops there instead of burning the queue on failing calls. One request per
    photo after that, cached, with live progress. A photo already scored shows instantly and costs
    nothing.
-4. **Read the field at a glance** — when the run finishes, a horizontal bar chart under the stats
-   shows every photo's composite, scaled to the best photo, with P(publish) and P(infobox) under
-   each bar.
+4. **Read the field at a glance** — when the run finishes, a chart under the stats plots every photo's
+   composite on one axis, thumbnails stacked where they would overlap, each labelled with its rank and
+   score. Two smaller controls sit under it: **view** switches between the default *combined* axis and
+   **by pose**, which gives each pose its own labelled stratum on the same scale — that is how you see
+   the best and worst photo *within* a pose rather than only across the whole run (rank numbers stay
+   global, so #3 means the same photo in both views). **thumbnail size** scales the chart for a
+   projector or a phone.
+
+   The run's own numbers are two one-line strips under the title — **Scores** (including mean quality)
+   and **Time & tokens** — and the **candidate spread** panel is a one-line summary you can expand when
+   you want the ranges, dead-zone shares and leading file names.
 5. **Download** the Markdown/JSON/CSV/PDF report, or read the cards on screen.
 
 ### Forms you can paste
@@ -312,7 +320,7 @@ hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
 
 ## Project documents
 
-- **`default_list.txt`** — the example list behind the **Load test data** button (12 real Commons
+- **`default_list.txt`** — the example list behind the **Load sample list** button (12 real Commons
   portraits, one `File:` title per line). **Replace this file** to change the default for everyone: it
   is read at request time, so it needs no code change. It is never pre-loaded into the box — the page
   starts empty and the list arrives only when someone asks for it. No comment lines in it — a `#` is

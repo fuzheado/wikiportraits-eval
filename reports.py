@@ -210,13 +210,14 @@ def build_md(items: list, meta: dict) -> str:
                  f"{a['face_visible']['noul']:.3f} | {it['result']['usage'].get('input_tokens')} | "
                  f"{it['result']['wall_s']:.2f}s |")
     L += ["", "## Per-image determinations", ""]
-    for it in ranked(items):
+    # numbered to match the rank column in the table above and the rank badge in the web UI
+    for rank, it in enumerate(ranked(items), 1):
         if it.get("status") != "done":
             continue
         a = _ans(it)
         comp = composite(it)
         pub = publish(it)
-        L += [f"### {it['title']}", ""]
+        L += [f"### #{rank} · {it['title']}", ""]
         if thumb(it):
             L += [f"![{label(it)}]({thumb(it)})", ""]
         L += [f"- Commons: https://commons.wikimedia.org/wiki/{it['title'].replace(' ', '_')}",
@@ -422,7 +423,9 @@ def build_pdf(items: list, meta: dict) -> bytes:
         doc.hr_small()
     doc.spacer(10)
     doc.h2("Per-image determinations, with the photo the model saw")
-    for it in ranked(items):
+    # the same rank as the "#" column above and the badge in the web UI, so a photo can be found by
+    # number in either place
+    for rank, it in enumerate(ranked(items), 1):
         if it.get("status") != "done":
             continue
         a = _ans(it)
@@ -431,7 +434,7 @@ def build_pdf(items: list, meta: dict) -> bytes:
         name = doc.add_image(data, label=label(it)) if data else None
         doc.spacer(4)
         top = sorted(a["pose"]["probabilities"].items(), key=lambda kv: -kv[1])
-        doc.card([("h", label(it)),
+        doc.card([("h", f"#{rank}  {label(it)}"),
                   f"composite {comp:.3f} (ours)   ·   P(publish) "
                   + ("-" if pub is None else f"{pub:.3f}")
                   + (f" ({a['publish_ready']['choice']})" if a.get("publish_ready", {}).get("choice") else "")

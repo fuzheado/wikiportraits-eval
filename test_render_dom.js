@@ -216,6 +216,45 @@ ok(/dead|0\.35/.test(spreadHtml), 'the dead-zone share is shown');
 ok(imgsBefore.length === 5, 'previous section left its images intact');
 ok(/composite/.test(doc.getElementById('stats').innerHTML || ''), 'stats grid carries the composite mean');
 
+// ---- 4c. section 2 readability: strips, a collapsible spread, and the pose strata view --------
+// This block renders a *done* job, because renderChart (and so the toggle) only draws on one.
+const doneJob = job(graded, {
+  status: 'done',
+  spread: { composite: spread([0.9, 0.5, 0.1]), publish_ready: spread([0.9, 0.6, 0.25]),
+            infobox_ready: spread([0.68, 0.5, 0.3]) },
+  stats: { n_scored: 3, n_input: 3, composite_mean: 0.5, p_publish_mean: 0.577,
+           p_infobox_mean: 0.493, p_infobox_median: 0.5, p_infobox_max: 0.68, n_above_half: 2,
+           quality_mean: 2.5, tokens_total: 2715, wall_median_s: 0.6, wall_total_s: 1.8,
+           poses: { head_shoulders: 3 }, n_429: 0 },
+});
+render(doneJob);
+const statsHtml = doc.getElementById('stats').innerHTML;
+const nStrips = (statsHtml.match(/class="strip"/g) || []).length;
+ok(nStrips === 2, `run stats are two one-line strips, not a box grid (got ${nStrips})`);
+ok(statsHtml.indexOf('statgroup') === -1, 'the old three-panel grid is gone');
+ok(/mean quality/.test(statsHtml) && /mean composite/.test(statsHtml),
+   'quality sits on the same strip as the score means');
+ok(/Scores/.test(statsHtml) && /Time/.test(statsHtml), 'both strips are labelled');
+const sd = doc.getElementById('spreaddetails');
+ok(sd !== null, 'the candidate spread is a collapsible <details>');
+ok(!sd.hasAttribute('open'), 'and it starts collapsed');
+ok(/candidates at or above/.test(sd.querySelector('summary').textContent),
+   'the collapsed one-liner still carries the headline counts');
+
+doc.getElementById('cm-pose').click();
+const poseHtml = doc.getElementById('chart').innerHTML;
+const nLabels = (poseHtml.match(/class="plabel"/g) || []).length;
+ok(nLabels === 5, `by-pose view draws one stratum per pose, empty ones included (got ${nLabels})`);
+ok(/head &amp; shoulders/.test(poseHtml), 'the occupied stratum is labelled with the pose name');
+ok(/class="cgrid"/.test(poseHtml), 'by-pose view adds vertical gridlines');
+ok(/one stratum per pose/.test(poseHtml), 'the heading says which view is drawn');
+ok(/class="cthumb"/.test(poseHtml), 'and the photos are still plotted');
+doc.getElementById('cm-combined').click();
+const combHtml = doc.getElementById('chart').innerHTML;
+ok(!/class="plabel"/.test(combHtml), 'the default combined view has no pose strata');
+ok(!/class="cgrid"/.test(combHtml), 'and no gridlines');
+ok(/thumbs stack/.test(combHtml), 'the default view keeps its own caption');
+
 // ---- 5. the About panel (async: the panel fetches its content) --------------------
 function finish() {
   console.log(`\nFAILURES: ${failures.length}`);
@@ -235,7 +274,7 @@ function finish() {
   doc.getElementById('load-test').click();
   await new Promise((r) => setTimeout(r, 30));
   ok(inputEl.value.split('\n').filter((s) => s.trim()).length === 2,
-     `Load test data fills the box from /api/default-list (got ${inputEl.value.split('\n').length} line(s))`);
+     `Load sample list fills the box from /api/default-list (got ${inputEl.value.split('\n').length} line(s))`);
   ok(/2 test photos loaded/.test(doc.getElementById('parseinfo').textContent),
      'the pill reports how many test photos were loaded');
 
