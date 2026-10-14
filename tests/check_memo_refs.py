@@ -8,8 +8,10 @@ import os
 import re
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DOC = os.path.join(HERE, "DEVELOPER-NOTE-v0.4.1.md")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
+DOC = os.path.join(ROOT, "DEVELOPER-NOTE-v0.4.1.md")
+# the note cites files all over the tree, so search the same roots the docs do
+SEARCH_DIRS = ("", "tests", "tools", "docs", "research", "static")
 
 EXTS = ("py", "md", "json", "jsonl", "pdf", "png", "sh", "html", "js", "txt", "img", "yaml", "yml")
 NAMEISH = re.compile(r"^(?:[\w.-]+/)*[\w.-]+\.(" + "|".join(EXTS) + r")$")
@@ -27,8 +29,7 @@ def main():
             names.add(tok)
     missing = []
     for n in sorted(names):
-        if not any(os.path.exists(p) for p in (os.path.join(HERE, n),
-                                               os.path.join(HERE, "research", n))):
+        if not any(os.path.exists(os.path.join(ROOT, sub, n)) for sub in SEARCH_DIRS):
             missing.append(n)
     for n in sorted(names):
         print(("  ok      " if n not in missing else "  MISSING ") + n)

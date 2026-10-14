@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Offline unit test for input parsing: every accepted form must map to the same File: title."""
+import os
+import sys
 import urllib.parse
+
+# this file lives in tests/; the app's modules and data files are at the repo root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 import wiclient
 

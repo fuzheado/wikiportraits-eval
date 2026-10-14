@@ -18,7 +18,8 @@ try {
   process.exit(2);
 }
 
-const html = fs.readFileSync(path.join(__dirname, 'static', 'index.html'), 'utf8');
+// this file lives in tests/; the DOM test runs the page's own script against the real markup
+const html = fs.readFileSync(path.join(__dirname, '..', 'static', 'index.html'), 'utf8');
 
 // Shape of /api/about (the server builds the real one from the live constants; the Python
 // contract test is what proves the two agree).

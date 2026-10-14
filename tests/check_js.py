@@ -10,8 +10,9 @@ import re
 import subprocess
 import sys
 
-HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
-JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "_index_extracted.js")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
+HTML = os.path.join(ROOT, "static", "index.html")
+JS = os.path.join(ROOT, "static", "_index_extracted.js")
 
 html = open(HTML, encoding="utf-8").read()
 blocks = re.findall(r"<script>(.*?)</script>", html, re.S)

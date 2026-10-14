@@ -342,22 +342,22 @@ A photo that cannot be embedded is listed at the end of the PDF rather than sile
 ## Tests
 
 ```bash
-bash run_all_tests.sh        # everything below, in order + the live contract test
-python3 test_forms.py        # input formats (offline)
-python3 test_commas.py       # file names containing commas (offline)
-python3 test_wsgi.py         # Toolforge uWSGI entry point (offline)
-python3 test_pipeline.py     # download/scoring overlap + state machine (offline)
-python3 test_reports.py      # composite, P(publish), spread, thumbnails in MD/PDF (offline)
-python3 test_thumb_width.py  # served width, ladder steps, cache keying (offline)
-python3 test_default_list.py # the starter list + the "run fresh" flag (offline)
-python3 test_default_list.py --live      # live: 1 batched Commons call, 0 model calls
-python3 test_privacy.py      # the request log: no query, no IP, no UA (offline)
-python3 check_js.py          # the inline script still parses (offline)
-python3 check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
+bash tests/run_all_tests.sh  # everything below, in order + the live contract test
+python3 tests/test_forms.py        # input formats (offline)
+python3 tests/test_commas.py       # file names containing commas (offline)
+python3 tests/test_wsgi.py         # Toolforge uWSGI entry point (offline)
+python3 tests/test_pipeline.py     # download/scoring overlap + state machine (offline)
+python3 tests/test_reports.py      # composite, P(publish), spread, thumbnails in MD/PDF (offline)
+python3 tests/test_thumb_width.py  # served width, ladder steps, cache keying (offline)
+python3 tests/test_default_list.py # the starter list + the "run fresh" flag (offline)
+python3 tests/test_default_list.py --live      # live: 1 batched Commons call, 0 model calls
+python3 tests/test_privacy.py      # the request log: no query, no IP, no UA (offline)
+python3 tests/check_js.py          # the inline script still parses (offline)
+python3 tests/check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
 python3 probe_inflight_pacing.py         # offline, 0 API calls: proves when INFLIGHT>1 does anything
-.venv-pdf/bin/python test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
-node test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
-python3 test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content
+.venv-pdf/bin/python tests/test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
+node tests/test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
+python3 tests/test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content
 WANT=4 python3 live_pipeline_check.py [URL]   # live: pipeline, states, latency on fresh files
 python3 verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports inspected
 python3 probe_concurrency.py --n 12 --streams 2              # live: the endpoint's capacity for 2

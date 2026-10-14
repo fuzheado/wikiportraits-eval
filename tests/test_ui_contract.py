@@ -7,6 +7,11 @@
 3. the public URL serves the page, the API and all four report formats
 """
 import json, re, sys, time, urllib.parse, urllib.request
+import os
+
+# this file lives in tests/; the app's modules and data files are at the repo root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 import wiclient as _wc      # the same constants the server runs, so fields can be diffed
 import core as _pg          # the live prompt/config constants (and the default-list cap)

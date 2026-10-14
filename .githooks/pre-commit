@@ -22,9 +22,10 @@ if [ -n "$SKIP_HOOKS" ]; then
 fi
 
 fail=0
-for t in test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py \
-         test_thumb_width.py test_default_list.py test_privacy.py check_js.py check_docs.py \
-         check_compat.py check_memo_refs.py; do
+for t in tests/test_forms.py tests/test_commas.py tests/test_wsgi.py tests/test_pipeline.py \
+         tests/test_reports.py tests/test_thumb_width.py tests/test_default_list.py \
+         tests/test_privacy.py tests/check_js.py tests/check_docs.py tests/check_compat.py \
+         tests/check_memo_refs.py; do
   if ! out=$(python3 "$t" 2>&1); then
     echo "pre-commit: $t FAILED"
     printf '%s\n' "$out" | tail -20
@@ -37,7 +38,7 @@ done
 # (looking for the directory silently skipped a test that was passing).
 if command -v node >/dev/null 2>&1; then
   if node -e "require.resolve('jsdom')" >/dev/null 2>&1; then
-    if ! out=$(node test_render_dom.js 2>&1); then
+    if ! out=$(node tests/test_render_dom.js 2>&1); then
       echo "pre-commit: test_render_dom.js FAILED"
       printf '%s\n' "$out" | tail -20
       fail=1

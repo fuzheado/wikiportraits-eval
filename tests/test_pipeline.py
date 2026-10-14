@@ -19,7 +19,8 @@ import time
 
 os.environ["CACHE_DIR"] = tempfile.mkdtemp(prefix="wp-test-cache-")
 os.environ["QUIET"] = "1"
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
+sys.path.insert(0, ROOT)
 
 import core  # noqa: E402
 import wiclient  # noqa: E402

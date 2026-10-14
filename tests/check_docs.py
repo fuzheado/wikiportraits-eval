@@ -5,7 +5,7 @@ import re
 import sys
 from typing import Optional
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
 DOCS = ["PRD.md", "README.md", "HANDOFF.md"]
 # texts that name a *shape* rather than a file
 NON_FILES = {"wiki-pageid-sha1-schemahash-width.json"}
@@ -34,7 +34,7 @@ def resolves(tok: str) -> Optional[str]:
     if os.path.exists(cand):
         return cand
     if "/" not in tok:
-        for sub in ("research", "static"):
+        for sub in ("tests", "tools", "docs", "research", "static"):
             if os.path.exists(os.path.join(ROOT, sub, tok)):
                 return os.path.join(ROOT, sub, tok)
     return None

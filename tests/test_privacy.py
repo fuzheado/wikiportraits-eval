@@ -19,7 +19,7 @@ import os
 import re
 import sys
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
 sys.path.insert(0, ROOT)
 
 import app  # noqa: E402

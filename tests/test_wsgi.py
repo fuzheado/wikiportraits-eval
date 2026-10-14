@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Test the WSGI shim (the traditional Toolforge backend path) without a server."""
 import io, json
+import os
+import sys
+
+# this file lives in tests/; the app's modules and data files are at the repo root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 import wsgi
 

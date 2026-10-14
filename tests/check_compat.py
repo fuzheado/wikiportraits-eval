@@ -45,7 +45,7 @@ _FLOOR_PROBE = (
     "print(json.dumps(bad))\n"
 )
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
 SKIP_DIRS = {"node_modules", "cache", ".git", "__pycache__", ".venv-pdf", ".venv", ".playwright-cli",
              "serve", ".githooks"}
 

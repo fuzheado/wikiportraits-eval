@@ -35,18 +35,18 @@ jobs:
         run: python3 -V
       - name: offline suites
         run: |
-          python3 test_forms.py
-          python3 test_commas.py
-          python3 test_wsgi.py
-          python3 test_pipeline.py
-          python3 test_reports.py
-          python3 test_thumb_width.py
-          python3 test_default_list.py
-          python3 test_privacy.py
-          python3 check_docs.py
-          python3 check_compat.py
-          python3 check_memo_refs.py
-          python3 check_js.py          # needs node
+          python3 tests/test_forms.py
+          python3 tests/test_commas.py
+          python3 tests/test_wsgi.py
+          python3 tests/test_pipeline.py
+          python3 tests/test_reports.py
+          python3 tests/test_thumb_width.py
+          python3 tests/test_default_list.py
+          python3 tests/test_privacy.py
+          python3 tests/check_docs.py
+          python3 tests/check_compat.py
+          python3 tests/check_memo_refs.py
+          python3 tests/check_js.py          # needs node
 
   dom:
     name: DOM test (jsdom)
@@ -59,7 +59,7 @@ jobs:
       - name: install jsdom
         run: npm install
       - name: run the DOM test
-        run: node test_render_dom.js
+        run: node tests/test_render_dom.js
 
   starter-list-live:
     name: starter list resolves on Commons (manual)
@@ -72,4 +72,4 @@ jobs:
           # Optional. Set it to a contact-URL User-Agent, or the check falls back to the repo's
           # built-in UA. Never commit a UA string containing an email address you would not publish.
           WIKIMEDIA_USER_AGENT: ${{ secrets.WIKIMEDIA_USER_AGENT }}
-        run: python3 test_default_list.py --live
+        run: python3 tests/test_default_list.py --live

@@ -11,7 +11,8 @@ spurious diff; if you want to look at them, run this script and open them.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
+sys.path.insert(0, ROOT)
 import wiclient  # noqa: E402
 from pdfmin import PDF, _jpeg_info, _png_info, _png_to_rgb  # noqa: E402
 
@@ -44,7 +45,7 @@ for title, wiki, label in CASES:
               "checked against the image box."], name=name)
 
 print("skipped:", doc.skipped)
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "pdfmin_image_test.pdf")
+out = os.path.join(ROOT, "research", "pdfmin_image_test.pdf")
 doc.save(out)
 raw = open(out, "rb").read()
 print(f"pdf: {len(raw)} bytes  /DCTDecode={raw.count(b'/DCTDecode')}  "
@@ -56,5 +57,5 @@ import pypdfium2 as pdfium  # noqa: E402  (dev-only)
 pdf = pdfium.PdfDocument(out)
 print("pdfium pages:", len(pdf))
 page = pdf[0]
-page.render(scale=1.6).to_pil().save(os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "pdfmin_image_test.png"))
+page.render(scale=1.6).to_pil().save(os.path.join(ROOT, "research", "pdfmin_image_test.png"))
 print("rendered", len(pdf), "page(s) to pdfmin_image_test.png")

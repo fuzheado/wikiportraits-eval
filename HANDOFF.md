@@ -39,16 +39,16 @@ Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 resta
 ## 2. Tests, and which ones cost API calls
 
 ```bash
-bash run_all_tests.sh                    # everything below, in order
-python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py test_thumb_width.py test_default_list.py test_privacy.py   # offline
-python3 check_js.py                      # offline: the page script parses (node --check)
-python3 check_compat.py                  # offline: nothing newer than the advertised 3.9 floor
-python3 check_docs.py check_memo_refs.py # offline: docs exist & cite real files (free)
-node test_render_dom.js                  # offline (needs `npm install` once — jsdom, ~25 MB)
-.venv-pdf/bin/python test_pdf_images.py             # renders a PDF back to PNG for eyeballing
+bash tests/run_all_tests.sh              # everything below, in order
+python3 tests/test_forms.py tests/test_commas.py tests/test_wsgi.py tests/test_pipeline.py tests/test_reports.py tests/test_thumb_width.py tests/test_default_list.py tests/test_privacy.py   # offline
+python3 tests/check_js.py                # offline: the page script parses (node --check)
+python3 tests/check_compat.py            # offline: nothing newer than the advertised 3.9 floor
+python3 tests/check_docs.py tests/check_memo_refs.py  # offline: docs exist & cite real files (free)
+node tests/test_render_dom.js            # offline (needs `npm install` once — jsdom, ~25 MB)
+.venv-pdf/bin/python tests/test_pdf_images.py       # renders a PDF back to PNG for eyeballing
                                                     # (.venv-pdf: python3 -m venv .venv-pdf && .venv-pdf/bin/pip install pypdfium2 pypdf)
 python3 verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports, PDF rendered
-python3 test_ui_contract.py [URL]        # live, but free when the files are already cached
+python3 tests/test_ui_contract.py [URL]  # live, but free when the files are already cached
 WANT=4 python3 live_pipeline_check.py [URL]   # live and costs 1 call per fresh file (+1 pre-flight probe, cached 10 min)
 python3 verify_live_two.py [URL]         # live: 1 cached + 1 fresh photo end to end, all four reports (+1 probe)
 python3 probe_latency_now.py             # live and costs 4 calls (2 text-only, 2 image)
@@ -60,7 +60,8 @@ python3 probe_thumb_ladder.py            # live once (~10 calls), free thereafte
 python3 analyze_question_spread.py       # offline: spread of every question in the cache (free)
 python3 summarize_wording_experiment.py  # offline: table from research/wording_experiment.jsonl
 python3 tune_infobox_question.py         # live and costs 20 calls (~19 min at 57 s/call, ~1 min warm)
-python3 test_default_list.py --live      # live: 1 batched Commons call, 0 model calls, no scoring
+python3 tests/test_default_list.py --live      # live: 1 batched Commons call, 0 model calls, no scoring
+```
 
 **Checks on commit and in CI.** `git config core.hooksPath .githooks` enables the pre-commit hook: it
 runs the offline suites always, and the live starter-list check **only when `default_list.txt` is
@@ -68,7 +69,11 @@ staged** — a network check must never gate an unrelated commit on Wikimedia be
 (`.github/workflows/checks.yml`) makes the same split: the offline suites on Python 3.9 and 3.12 plus
 the jsdom test on every push, and the Commons check on `workflow_dispatch` only. Neither ever runs a
 scoring job, because that spends real quota on a service that is still new (§13).
-```
+
+**The suites live in `tests/` and are invoked from the repo root** (`python3 tests/test_x.py`), the
+same way CI and the hook run them. Each one also anchors its own `sys.path` at the repo root, so
+running a single suite from anywhere (`python3 /path/to/repo/tests/test_x.py`) works too — that is
+what makes a one-off run from another directory safe.
 
 `test_render_dom.js` is the only real UI test: it runs the page script in jsdom and asserts the
 things that regressed before — row/`<img>` **element identity** across renders, `src` assigned

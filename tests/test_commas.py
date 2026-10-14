@@ -4,6 +4,13 @@
 Reported 2026-10-12: "File:MKr377445 Susanne Wuest (In die Sonne schauen, Cannes 2025).jpg"
 was split on the comma into an "incomplete File: title" plus a bogus "File:Cannes 2025).jpg".
 """
+import os
+import sys
+
+# this file lives in tests/; the app's modules and data files are at the repo root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
 import wiclient
 
 COMMA_FILE = "File:MKr377445 Susanne Wuest (In die Sonne schauen, Cannes 2025).jpg"
