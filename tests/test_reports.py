@@ -187,6 +187,55 @@ ok("one stratum per pose" not in combined and "thumbs stack" not in strata,
 ok(pdf_text(reports.build_pdf(posed, {"spread": {}, "pdf_path": out, "elapsed_s": 1})) == combined,
    "chart_view defaults to the combined chart (no parameter, same report)")
 
+# --- the PDF chart follows the AXIS too (?axis=candidates) -------------------------------------
+# The web UI can fit the axis to the top N; the export has to agree, or a reader comparing the two sees
+# a different chart. 24 photos with the top 12 crammed into a 0.05 band, the shape measured on real data.
+spread_items = []
+for n in range(24):
+    it = item(f"File:S{n}.jpg", 60 + n, answers(), thumb_file=img_path, status="done")
+    it["composite"] = 0.02 + n * 0.04 if n < 12 else 0.90 + (n - 12) * 0.004
+    spread_items.append(it)
+meta = {"spread": {}, "pdf_path": out, "elapsed_s": 1}
+full_chart = pdf_text(reports.build_pdf(spread_items, meta, chart_axis="full"))
+cand_chart = pdf_text(reports.build_pdf(spread_items, meta, chart_axis="candidates"))
+ok("axis 0 ->" in full_chart, "the default PDF chart spans the whole field")
+ok("the top 12 of 24 scored" in cand_chart, "axis=candidates fits the PDF chart to the top 12")
+ok("12 below the window" in cand_chart, "and says how many photos are outside it")
+ok("the top 12" not in full_chart, "the two axes are not mixed up")
+ok(pdf_text(reports.build_pdf(spread_items, meta)) == full_chart,
+   "chart_axis defaults to the whole field (no parameter, same report)")
+
+def pdf_labels(blob: bytes):
+    """(x, y, text) for every free-positioned string — enough to check chart placement.
+
+    `text_at` writes `x y Td (text) Tj`, so the position comes out with the string. The coordinates
+    must be allowed to be NEGATIVE: a chart tall enough to run past the page emits negative `y`, and
+    an earlier version of this helper matched only `\d+.\d+` — so it silently dropped 11 of 20 chart
+    badges and "verified" a spacing property on a subset. The missed labels were the interesting ones.
+    """
+    out = []
+    for m in re.finditer(rb"(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) Td \(((?:\\.|[^()\\])*)\) Tj", blob):
+        s = m.group(3).replace(b"\\(", b"(").replace(b"\\)", b")").replace(b"\\\\", b"\\")
+        out.append((float(m.group(1)), float(m.group(2)), s.decode("latin-1")))
+    return out
+
+
+# --- the PDF chart must not stack two photos on one spot either --------------------------------
+# The web chart had a lane cap that silently drew every collider at the same position; the PDF had the
+# same defect with a lower cap (4), and the PDF is the artefact people actually pass around.
+crowd = []
+for n in range(20):
+    it = item(f"File:C{n}.jpg", 90 + n, answers(), thumb_file=img_path, status="done")
+    it["composite"] = 0.44 + n * 0.0002          # all inside one 56pt column
+    crowd.append(it)
+clabels = [(round(x), round(y), t) for x, y, t in pdf_labels(reports.build_pdf(crowd, meta))
+           if re.fullmatch(r"#\d+", t)]      # the chart badge is exactly `#12`; a card heading is
+                                              # `#1  File:x.jpg`, so match the bare form only
+ok(len(clabels) == 20, f"every photo in a 20-photo PDF clump is charted (got {len(clabels)})")
+cspots = [(x, y) for x, y, _t in clabels]
+ok(len(cspots) == len(set(cspots)),
+   f"no two charted photos share a position in the PDF (got {len(cspots) - len(set(cspots))} sharing)")
+
 print(f"\nFAILURES: {len(FAIL)}")
 for f in FAIL:
     print("  -", f)

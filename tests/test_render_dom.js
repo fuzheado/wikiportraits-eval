@@ -370,22 +370,74 @@ ok(/first result lands here/.test(caption()), 'and says what it is waiting for')
 // drawn at exactly the same left/bottom as the 6th, and a 20-photo clump hid 14 of them behind others.
 // Identical composites are the worst case, so that is what this uses.
 console.log('dense clump');
-const clumpJob = (n, comp) => job(Array.from({ length: n }, (_, i) => {
+// 20 photos inside one 56px column — near-identical composites, the worst case for lane stacking.
+// Rank 1 is the highest composite (Clump 20).
+const clumpJob = (n) => job(Array.from({ length: n }, (_, i) => {
   const a = fullAnswers(0.5, 0.5, 0.9, 0.9, 'head_shoulders');
   return item('done', { pageid: 950 + i, title: `File:Clump ${i + 1}.jpg`, raw: `File:Clump ${i + 1}.jpg`,
-                        composite: comp, publish_p: 0.5,
+                        composite: 0.44 + i * 0.0002, publish_p: 0.5,
                         result: { wall_s: 0.5, usage: {}, answers: a } });
 }), { id: 'clump', status: 'done', progress: { done: n, total: n }, stats: liveStats });
 
-render(clumpJob(20, 0.44));
+render(clumpJob(20));
 const clumpThumbs = [...doc.querySelectorAll('#chart .cthumb')];
-ok(clumpThumbs.length === 20, `every photo in a 20-photo clump is drawn (got ${clumpThumbs.length})`);
+const chips = [...doc.querySelectorAll('#chart .cchip')];
+ok(clumpThumbs.length === 8, `a 20-photo clump draws 8 lanes rather than growing to 20 (got ${clumpThumbs.length})`);
 const spots = clumpThumbs.map((e) => `${e.style.left}|${e.style.bottom}`);
-ok(new Set(spots).size === 20,
-   `all 20 sit in distinct positions — a hidden photo is worse than a tall band (got ${new Set(spots).size})`);
-const distinctBottom = new Set(clumpThumbs.map((e) => e.style.bottom));
-ok(distinctBottom.size === 20,
-   `each one gets its own lane rather than sharing an overflow bucket (got ${distinctBottom.size} lanes)`);
+ok(new Set(spots).size === clumpThumbs.length,
+   `no two drawn thumbnails share a position (got ${new Set(spots).size} of ${clumpThumbs.length})`);
+ok(new Set(clumpThumbs.map((e) => e.style.bottom)).size === clumpThumbs.length,
+   'each drawn one has its own lane rather than sharing an overflow bucket');
+ok(chips.length === 1 && chips[0].textContent === '+12',
+   `the other 12 are summarised in one chip, not hidden silently (got ${chips.map((c) => c.textContent).join(",") || "none"})`);
+ok(/12 more photo/.test(chips[0].title) && /Clump 12\.jpg/.test(chips[0].title),
+   'the chip carries the count and names the best of the ones it stands for');
+// placement runs BEST FIRST, so the photograph you are looking for is never the summarised one
+const drawnTitles = clumpThumbs.map((e) => e.dataset.title);
+ok(drawnTitles.indexOf('File:Clump 20.jpg') !== -1 && drawnTitles.indexOf('File:Clump 1.jpg') === -1,
+   'the BEST photo of the clump is drawn and the worst is summarised, not the other way round');
+
+// ---- 4g. the candidates axis ------------------------------------------------------------------
+// 24 photos whose top 12 are crammed into a 0.05 band — the shape measured on 100 real photos, where
+// the ones you can actually use are the ones stacked deepest on the full-field axis.
+console.log('candidates axis');
+const spreadJob = () => job(Array.from({ length: 24 }, (_, i) => {
+  const a = fullAnswers(0.5, 0.5, 0.9, 0.9, 'head_shoulders');
+  const comp = i < 12 ? 0.02 + i * 0.04 : 0.90 + (i - 12) * 0.004;
+  return item('done', { pageid: 980 + i, title: `File:Spread ${i + 1}.jpg`, raw: `File:Spread ${i + 1}.jpg`,
+                        composite: comp, publish_p: 0.5,
+                        result: { wall_s: 0.5, usage: {}, answers: a } });
+}), { id: 'spread', status: 'done', progress: { done: 24, total: 24 }, stats: liveStats });
+
+render(spreadJob());
+ok(/axis 0 →/.test(caption()), `the default axis is the whole field (got "${caption().slice(0, 34)}")`);
+const top12 = [...doc.querySelectorAll('#chart .cthumb')]
+  .filter((e) => /Spread (1[3-9]|2[0-4])\.jpg/.test(e.dataset.title || ""));
+const spreadOf = (els) => {
+  const xs = els.map((e) => parseFloat(e.style.left));
+  return Math.max(...xs) - Math.min(...xs);
+};
+ok(top12.length >= 8,
+   `the top band is plotted on the full axis (got ${top12.length} of 12 drawn; the rest are in a chip)`);
+const fullSpan = spreadOf(top12);
+
+doc.getElementById('ca-cand').click();
+ok(/the top 12 of 24 scored/.test(caption()), `the candidates axis says what it is showing (got "${caption().slice(0, 52)}")`);
+ok(/12 below the window/.test(caption()), 'and how many are outside it');
+ok(doc.getElementById('ca-cand').classList.contains('active'), 'the control shows which axis is on');
+const candThumbs = [...doc.querySelectorAll('#chart .cthumb')];
+ok(candThumbs.length === 12, `only the photos inside the window are plotted (got ${candThumbs.length})`);
+ok(candThumbs.map((e) => e.querySelector('.crank').textContent).indexOf('1') !== -1,
+   'ranks stay global to the run, not renumbered inside the window');
+const candSpan = spreadOf(candThumbs);
+ok(candSpan > fullSpan * 3,
+   `fitting the axis spreads the top band across the width (${fullSpan.toFixed(0)}px -> ${candSpan.toFixed(0)}px)`);
+ok(new Set(candThumbs.map((e) => e.style.bottom)).size === 1,
+   'and they fit in ONE lane when fitted, instead of being stacked deep');
+ok(doc.querySelectorAll('#chart .cchip').length === 0,
+   'fitted, nothing needs summarising — the chip is a full-field fallback, not the default behaviour');
+doc.getElementById('ca-full').click();
+ok(/axis 0 →/.test(caption()), 'and the control switches back to the whole field');
 
 // ---- 5. the About panel (async: the panel fetches its content) --------------------
 function finish() {

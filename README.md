@@ -77,8 +77,15 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    it: **view** switches between the default *combined* axis and
    **by pose**, which gives each pose its own labelled stratum on the same scale — that is how you see
    the best and worst photo *within* a pose rather than only across the whole run (rank numbers stay
-   global, so #3 means the same photo in both views). **thumbnail size** scales the chart for a
-   projector or a phone.
+   global, so #3 means the same photo in both views). **axis** switches between **whole field**
+   (0 → the best score) and **candidates**, which fits the axis to the top 12 photos instead. That is
+   worth knowing about on a big set: the photos you can actually use are usually the most crowded,
+   because everything below them is squeezed into the same stretch of axis. Measured on 100 photos,
+   the top 9 spanned 0.052 of composite — 52 px wide and **9 deep** on the whole-field axis, and **one
+   row** once fitted. If a stack still goes deeper than 8, the rest is summarised in a `+N` chip rather
+   than drawn on top of itself; hovering the chip names the best of the photos it stands for, and every
+   one of them still has a card in the ranked list. **thumbnail size** scales the chart for a
+   projector or a phone. The PDF export follows both the view and the axis.
    **The PDF export follows this choice** — with *by pose* selected, the
    report's chart is the same labelled strata rather than the combined axis.
 

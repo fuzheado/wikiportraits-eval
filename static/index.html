@@ -51,6 +51,11 @@
   .stat{border:1px solid var(--line);border-radius:8px;padding:8px}
   .csize{padding:2px 10px;font-size:12px}
   .csize.active{background:var(--blue);border-color:var(--blue);color:#fff}
+  /* the summary for a clump too deep to draw in full: it says how many are there, and lists the
+     lowest-ranked of them on hover, rather than hiding them without a word */
+  .cchip{position:absolute;transform:translateX(-50%);font-size:10.5px;font-weight:700;color:#fff;
+         background:var(--muted);border-radius:999px;padding:1px 7px;cursor:help;
+         font-variant-numeric:tabular-nums}
   .stat .k{font-size:12px;color:var(--muted)}
   .item{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px;
         display:flex;gap:12px;align-items:flex-start}
@@ -235,6 +240,9 @@
       <span class="meter">view:</span>
       <button id="cm-combined" class="csize" title="one axis with every photo on it">combined</button>
       <button id="cm-pose" class="csize" title="one stratum per pose, so you can compare photos within a pose">by pose</button>
+      <span class="meter" style="margin-left:10px">axis:</span>
+      <button id="ca-full" class="csize" title="the whole field: 0 up to the best score">whole field</button>
+      <button id="ca-cand" class="csize" title="fit the axis to the top candidates, so the photos you can actually use get the full width">candidates</button>
       <span class="meter" style="margin-left:10px">thumbnail size:</span>
       <button id="cs-s" class="csize" title="small">S</button>
       <button id="cs-m" class="csize" title="medium">M</button>
@@ -464,6 +472,33 @@ function markChartMode() {
 }
 ["combined", "pose"].forEach(k => { const b = $("cm-" + k); if (b) b.onclick = () => setChartMode(k); });
 
+// Axis window. "whole field" is 0 -> best+headroom, as it always was. "candidates" fits the axis to the
+// top N photos instead, which is the one thing that gives the usable photos room: measured on 100 real
+// photos (2026-10-14), the top 9 spanned 0.052 of composite and needed 9 lanes (834px) of stacking on
+// the full axis, and 2 lanes (204px) once fitted. Presentation only — ranks stay global to the run.
+const CANDIDATE_WINDOW = 12;      // how many photos the "candidates" axis spans
+const CANDIDATE_FLOOR_RATIO = 0.8;   // …and it never reaches below this share of the best score
+// Past this many lanes a stack stops being readable, so the rest is summarised in a chip. Placement
+// runs best-first, so what gets summarised is the WORST of the clump, never the photograph you are
+// actually looking for (see renderChart).
+const DRAWN_LANES = 8;
+let axisMode = (function () { try { return localStorage.getItem("wp-chart-axis") || "full"; }
+                              catch (e) { return "full"; } })();
+const AXIS_MODES = [["ca-full", "full"], ["ca-cand", "candidates"]];
+function setAxisMode(m) {
+  axisMode = m;
+  try { localStorage.setItem("wp-chart-axis", m); } catch (e) {}
+  markChartAxis();
+  if (lastJob) renderChart(lastJob);
+}
+function markChartAxis() {
+  AXIS_MODES.forEach(([id, m]) => {
+    const b = $(id); if (b) b.classList.toggle("active", m === axisMode);
+  });
+}
+AXIS_MODES.forEach(([id, m]) => { const b = $(id); if (b) b.onclick = () => setAxisMode(m); });
+markChartAxis();
+
 // Row order: best-first (the ranking) or the order the lines arrived in — which is also the order
 // they were evaluated, so it doubles as a progress view. Presentation only: the composite rank is
 // reported either way (badge in ranked mode, named in the meta line in list mode).
@@ -499,6 +534,7 @@ function renderChart(job) {
   const byPose = chartMode === "pose";
   markChartSize();
   markChartMode();
+  markChartAxis();
 
   // One full clear per RUN, never per poll. Everything below this line patches nodes in place.
   const key = String(job.id || "");
@@ -539,51 +575,99 @@ function renderChart(job) {
   }
 
   const max = done[done.length - 1].composite;
-  const exact = Math.min(1, Math.ceil((max * 1.1 + 0.02) * 10) / 10);   // one-decimal ceiling w/ headroom
-  // The axis input is `max`, the best composite so far, and results only ever push it UP — so the axis
-  // is monotonic by construction and no thumbnail can move backwards. What it does do is step up in
-  // 0.1 jumps as a new best arrives, which slides every thumbnail left; the CSS transition on
-  // `.cthumb` is what turns that slide into a movement rather than a jump. (A high-water-mark guard
-  // was written here first and then removed: `max` is already monotonic, so it could never fire.)
-  const top = exact;
+  const fullTop = Math.min(1, Math.ceil((max * 1.1 + 0.02) * 10) / 10);   // one-decimal ceiling w/ headroom
+  // The axis spans [lo, hi]. "whole field" is 0 -> best+headroom, exactly as it always was.
+  // "candidates" fits the axis to the top N instead, which is the one thing that gives the usable
+  // photos room — measured on 100 real photos (2026-10-14): the top 9 spanned 0.052 of composite and
+  // needed 9 lanes (834px) of stacking on the full axis, and 2 lanes (204px) once fitted.
+  // The axis input is still `max`, the best so far, which results only ever push UP, so the axis stays
+  // monotonic mid-run and no thumbnail can move backwards. What it does do is step up as a new best
+  // arrives, sliding every thumbnail left; the CSS transition on `.cthumb` smooths that. (A
+  // high-water-mark guard was written here first and removed: `max` is already monotonic.)
   const Z = CHART_SIZES[chartSize] || CHART_SIZES.m;
   const TW = Z.TW, GAP = 10, ROW = Z.ROW;            // thumb width, min gap, lane height (px)
+  let lo = 0, hi = fullTop, plotted = done, outside = 0;
+  if (axisMode === "candidates") {
+    // The window is the top CANDIDATE_WINDOW photos, but never reaching below CANDIDATE_FLOOR_RATIO x
+    // the best score. Both halves are load-bearing: a plain "top 12" on a long tail stretches the
+    // window down to the mediocre photos, and the ones you actually want stay bunched at the right
+    // edge — measured on a real 20-photo run, "top 12" spanned 0.15 -> 0.941 and left the five good
+    // photos inside 20% of the width, where the same run floored at 0.8 x best gives 0.830 -> 0.941.
+    const floor = max * CANDIDATE_FLOOR_RATIO;
+    const topN = done.filter((i) => i.composite >= floor).slice(-CANDIDATE_WINDOW);
+    const cl = topN.length ? topN[0].composite : 0;
+    const ch = topN.length ? topN[topN.length - 1].composite : 0;
+    outside = done.length - topN.length;
+    // only worth switching axes if it actually spreads something: a few photos, some excluded
+    if (topN.length >= 3 && outside >= 2 && ch > cl) {
+      lo = cl; hi = ch; plotted = topN;
+    } else { outside = 0; }
+  }
+  const windowed = lo > 0 || hi < fullTop;
+  const w = box.clientWidth || 800;
+  const pad = windowed ? TW / 2 : 0;                 // keep the two extreme thumbs fully inside
+  const span = Math.max(1e-9, hi - lo);
+  const xOf = (v) => pad + ((v - lo) / span) * Math.max(1, w - 2 * pad);
 
-  meterEl.innerHTML = `axis 0 → ${fmt(top, 1)} (best photo ${fmt(max)}) · `
-    + `<b>${nDone} of ${all.length} scored</b>${running ? " so far" : ""} · our arithmetic, `
+  meterEl.innerHTML = (windowed
+      ? `axis ${fmt(lo, 2)} → ${fmt(hi, 3)} · the top ${plotted.length} of ${done.length} scored`
+        + (outside ? `; ${outside} below the window` : "")
+      : `axis 0 → ${fmt(hi, 1)} (best photo ${fmt(max)})`)
+    + ` · <b>${nDone} of ${all.length} scored</b>${running ? " so far" : ""} · our arithmetic, `
     + `min(face, eyes) × pose weight — not a model probability · `
     + (byPose ? "one stratum per pose; rank badges stay global"
               : "thumbs stack when they would overlap");
-
-  const w = box.clientWidth || 800;
 
   // One group per pose (a single group in the combined view). Thumbs stack into lanes when a
   // neighbour would overlap, and each group gets its own band of vertical space.
   const groups = byPose
     ? POSE_ROWS.concat(["other"])
-        .map((k) => ({key: k, items: done.filter((i) => poseBucket(i) === k)}))
+        .map((k) => ({key: k, items: plotted.filter((i) => poseBucket(i) === k)}))
         .filter((g) => g.items.length || g.key !== "other")
-    : [{key: "", items: done}];
+    : [{key: "", items: plotted}];
   let y = 0;
   for (const g of groups) {
-    // Stack into lanes so a thumbnail never lands on top of another. NOTE the loop bound: it compares
-    // against `lanes.length`, not a constant, so a new lane is appended when every existing one is
-    // occupied. An earlier version bounded at LANES_MAX and then wrote into `lanes[LANES_MAX]` as an
-    // "overflow bucket" — so the 7th photo in a column was drawn at exactly the same left/bottom as
-    // the 6th, and the 20th hid 14 behind it (measured 2026-10-14). Never cap: a photo that is not
-    // drawn is worse than a tall band, and the page scrolls.
+    // Stack into lanes so a thumbnail never lands on top of another. Two things matter here:
+    //
+    //   * the loop compares against `lanes.length`, NEVER a constant. An earlier version bounded at
+    //     LANES_MAX and then wrote into `lanes[LANES_MAX]` as an "overflow bucket", so the 7th photo
+    //     in a column was drawn at exactly the same left/bottom as the 6th — 20 photos hid 14 behind
+    //     others (measured 2026-10-14, HANDOFF §4). Same defect was in the PDF chart.
+    //   * placement runs BEST FIRST (`[...g.items].reverse()`), because lanes fill in arrival order
+    //     and anything past DRAWN_LANES is summarised rather than drawn. Filling worst-first would put
+    //     the best photo in the column into the lane that gets summarised away.
     const lanes = [];                                // each lane: last x (px) occupied
-    g.placed = g.items.map((it) => {
-      const x = (it.composite / top) * w;
+    g.placed = [...g.items].reverse().map((it) => {
+      const x = xOf(it.composite);
       let lane = 0;
       while (lane < lanes.length && lanes[lane] != null && Math.abs(x - lanes[lane]) < TW + GAP) lane++;
       lanes[lane] = x;
       return {it, x, lane};
     });
-    g.maxLane = g.placed.length ? Math.max(...g.placed.map((p) => p.lane)) : 0;
+    // Past DRAWN_LANES a stack stops being readable, so the remainder is summarised in a chip instead
+    // of growing the band to thousands of pixels. Nothing is hidden silently: the chip carries the
+    // count and the lowest-ranked titles, and every photo still has a card in the ranked list below.
+    g.drawn = g.placed.filter((p) => p.lane < DRAWN_LANES);
+    // One chip per CONTIGUOUS clump — not per fixed-width bucket. An earlier version grouped by
+    // `Math.round(x / (TW + GAP))`, which split a single clump into two chips (`+7`, `+5`) whenever it
+    // happened to straddle a bucket edge; the test caught it. A run ends when the next hidden photo is
+    // more than one collision window from the previous one, which is what "one clump" means here.
+    g.chips = [];
+    const hidden = g.placed.filter((q) => q.lane >= DRAWN_LANES).sort((a, b) => a.x - b.x);
+    for (const p of hidden) {
+      let c = g.chips[g.chips.length - 1];
+      if (!c || p.x - c.xLast > TW + GAP) {
+        g.chips.push(c = {xLast: p.x, x: p.x, items: []});
+      }
+      c.items.push(p.it);
+      c.xLast = p.x;
+      c.x = (c.x * (c.items.length - 1) + p.x) / c.items.length;
+    }
+    g.maxLane = g.drawn.length ? Math.max(...g.drawn.map((p) => p.lane)) : 0;
+    const laneRows = Math.max(g.maxLane + 1, g.chips.length ? DRAWN_LANES + 1 : 0, g.items.length ? 1 : 0);
     g.top = y;
     // an empty stratum is a thin labelled line, so the axis stays stable without wasting height
-    g.height = g.items.length ? (g.maxLane * ROW + 26 + Z.IMH + 26) : 30;
+    g.height = g.items.length ? ((laneRows - 1) * ROW + 26 + Z.IMH + 26) : 30;
     y += g.height;
   }
   box.style.height = y + "px";
@@ -601,7 +685,7 @@ function renderChart(job) {
     // "candid" label (real bug, 2026-10-14). Combined mode has one group spanning the full height,
     // so this reduces exactly to the original lane*ROW + 26.
     const bandBottom = H - (g.top + g.height);
-    for (const p of g.placed) {
+    for (const p of g.drawn) {
       const it = p.it;
       const title = it.title || it.raw || "";
       const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
@@ -643,15 +727,47 @@ function renderChart(job) {
     if (!live.has(k)) { a.remove(); chartNodes.delete(k); }
   }
 
+  // Clump summaries, for whatever the lane limit kept off the chart. Rebuilt every render like the
+  // axis chrome: a chip has no <img>, so there is nothing to preserve — and it must never be
+  // mistakeable for a thumb that was actually drawn. Built with the DOM API, not innerHTML, so the
+  // titles (which are user-supplied file names) need no escaping.
+  box.querySelectorAll(".cchip").forEach((n) => n.remove());
+  for (const g of groups) {
+    if (!g.chips.length) continue;
+    const bandBottom = H - (g.top + g.height);
+    for (const c of g.chips) {
+      const sorted = [...c.items].sort((a, b) => (rankOf.get(a) || 0) - (rankOf.get(b) || 0));
+      const chip = document.createElement("span");
+      chip.className = "cchip";
+      chip.textContent = "+" + c.items.length;
+      chip.title = `+${c.items.length} more photo${c.items.length === 1 ? "" : "s"} in this clump — `
+        + `best of the ones not drawn:\n`
+        + sorted.slice(0, 6).map((it) =>
+            `#${rankOf.get(it)} ${fmt(it.composite)} ${(it.title || it.raw || "").replace("File:", "")}`).join("\n")
+        + (c.items.length > 6 ? `\n… and ${c.items.length - 6} more` : "");
+      chip.style.left = Math.max(10, Math.min(w - 10, c.x)).toFixed(0) + "px";
+      chip.style.bottom = (bandBottom + DRAWN_LANES * ROW + 26).toFixed(0) + "px";
+      box.appendChild(chip);
+    }
+  }
+
   // The chrome that legitimately changes with the axis. Cheap spans with no images, so they are
   // rebuilt rather than patched — but removed and re-added NEXT TO the thumbnails, never by wiping
   // the container (which is what would take the <img> elements with it).
   box.querySelectorAll(".cgrid,.ctick").forEach(n => n.remove());
   const grid = document.createDocumentFragment();
   // vertical gridlines only in the strata view, where they are what makes the layers comparable;
-  // the bottom ticks appear in both
-  for (let v = 0; v <= top + 1e-9; v += 0.1) {
-    const left = ((Math.round(v * 10) / 10) / top * 100).toFixed(2);
+  // the bottom ticks appear in both. The step follows the window: 0.1 as it always was on the whole
+  // field, and finer when the axis is fitted to a narrow band (a 0.90-0.96 window would otherwise
+  // draw one tick or none).
+  let tickStep = 0.1;
+  if (windowed) {
+    const raw = (hi - lo) / 6;
+    tickStep = [0.0025, 0.005, 0.01, 0.02, 0.05, 0.1].find((s) => s >= raw) || 0.1;
+  }
+  for (let v = (windowed ? Math.ceil(lo / tickStep) * tickStep : 0); v <= hi + 1e-9; v += tickStep) {
+    const val = Math.round(v * 10000) / 10000;
+    const left = ((xOf(val) / w) * 100).toFixed(2);
     if (byPose) {
       const gl = document.createElement("span");
       gl.className = "cgrid";
@@ -661,7 +777,7 @@ function renderChart(job) {
     const t = document.createElement("span");
     t.className = "ctick";
     t.style.left = left + "%";
-    t.textContent = v.toFixed(1);
+    t.textContent = windowed ? String(Math.round(val * 1000) / 1000) : val.toFixed(1);
     grid.appendChild(t);
   }
   box.appendChild(grid);
@@ -1166,6 +1282,7 @@ $("share").onclick = async () => {
   if (!titles.length) return;
   const q = new URLSearchParams({ list: titles.join("\n"), run: "1" });
   if (chartMode === "pose") q.set("view", "pose");
+  if (axisMode === "candidates") q.set("axis", "candidates");
   const url = `${location.origin}${location.pathname}?${q.toString()}`;
   const box = $("shareurl");
   if (url.length > URL_LIST_HARD_MAX) {
@@ -1183,8 +1300,13 @@ $("share").onclick = async () => {
 ["md", "json", "csv", "pdf"].forEach(f => {
   $("dl-" + f).onclick = () => {
     if (!jobId) return;
-    const q = (f === "pdf" && chartMode === "pose") ? "?view=pose" : "";
-    window.location = `/api/job/${jobId}/report.${f}${q}`;
+    // the PDF's chart is drawn server-side, so the axis choice has to travel with the download
+    const p = [];
+    if (f === "pdf") {
+      if (chartMode === "pose") p.push("view=pose");
+      if (axisMode === "candidates") p.push("axis=candidates");
+    }
+    window.location = `/api/job/${jobId}/report.${f}${p.length ? "?" + p.join("&") : ""}`;
   };
 });
 
@@ -1245,8 +1367,9 @@ const URL_LIST_ACTION_MAX = 50;    // and never auto-check more entries than thi
 
 function applyUrlParams() {
   const qs = new URLSearchParams(location.search);
-  // the chart view is a display preference, so honour it even without a list
+  // the chart view and axis are display preferences, so honour them even without a list
   if (qs.get("view") === "pose") setChartMode("pose");
+  if (qs.get("axis") === "candidates") setAxisMode("candidates");
   const raw = qs.get("list");
   if (raw === null) return;                        // no ?list= : the box stays empty (invariant 12)
   // drop the params immediately, so a reload or a copied address bar cannot replay them

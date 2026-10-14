@@ -286,13 +286,26 @@ POSE_SHORT = {"head_shoulders": "head & shoulders", "three_quarter": "three-quar
               "full_body": "full body", "group": "group", "candid": "candid"}
 
 
-def _pdf_chart(doc, items, by_pose=False):
-    """The composite-distribution chart, as in the web UI: thumbnails plotted along a
-    0 -> best+headroom axis, stacked into lanes when they would overlap.
+CANDIDATE_WINDOW = 12        # how many top photos the "candidates" axis spans, and
+CANDIDATE_FLOOR_RATIO = 0.8  # …it never reaches below this share of the best score.
+                             # **Both must match `CANDIDATE_WINDOW` / `CANDIDATE_FLOOR_RATIO` in
+                             # static/index.html** — the web UI and this export have to agree on what
+                             # "the candidates" are, and nothing enforces it (test_ui_contract.py
+                             # checks the two numbers appear in the served page, which is the closest
+                             # thing to a guard).
+
+
+def _pdf_chart(doc, items, by_pose=False, axis="full"):
+    """The composite-distribution chart, as in the web UI: thumbnails plotted along the axis,
+    stacked into lanes when they would overlap.
 
     `by_pose` draws the same axis once per pose, in labelled strata (the web UI's "by pose"
-    view), so the best and worst photo *within* a pose can be seen. Rank badges are global to
-    the run in both views, matching the web UI and the tables.
+    view), so the best and worst photo *within* a pose can be seen. `axis="candidates"` fits the
+    axis to the top `CANDIDATE_WINDOW` photos rather than the whole 0 -> best range (the web UI's
+    "candidates" axis), which is what gives the photos a reader can actually use their room:
+    measured on 100 real photos (2026-10-14), the top 9 spanned 0.052 of composite and needed 9
+    lanes of stacking on the full axis, and 2 once fitted. Rank badges stay global to the run in
+    every view, matching the web UI and the tables.
 
     The same thumbnail bytes as the per-image cards, registered once per unique image and
     repositioned on the axis — so a charted photo costs no extra embed.
@@ -302,18 +315,65 @@ def _pdf_chart(doc, items, by_pose=False):
     if len(done) < 2:
         return
     TW, TH, GAP, ROW = 46.0, 60.0, 8.0, 84.0     # thumb box, min gap, lane height (points)
-    LANES_MAX = 4
+    # No lane cap: see the comment in `place`. A cap here (it was 4) silently stacked photos on top of
+    # each other in the exported PDF — the artefact people actually share.
     maxc = composite(done[-1])
-    top = min(1.0, math.ceil((maxc * 1.1 + 0.02) * 10) / 10)   # one-decimal ceiling w/ headroom
+    full_top = min(1.0, math.ceil((maxc * 1.1 + 0.02) * 10) / 10)   # one-decimal ceiling w/ headroom
+    lo, hi, plotted, outside = 0.0, full_top, done, 0
+    if axis == "candidates":
+        # Top CANDIDATE_WINDOW photos, never below CANDIDATE_FLOOR_RATIO x the best. Both halves matter:
+        # a plain "top N" on a long tail drags the window down to the mediocre photos and leaves the
+        # good ones bunched at the right edge. See the same comment in static/index.html.
+        floor = maxc * CANDIDATE_FLOOR_RATIO
+        topn = [it for it in done if composite(it) >= floor][-CANDIDATE_WINDOW:]
+        if len(topn) >= 3 and len(done) - len(topn) >= 2 and composite(topn[-1]) > composite(topn[0]):
+            lo, hi, plotted = composite(topn[0]), composite(topn[-1]), topn
+            outside = len(done) - len(topn)
+    windowed = lo > 0.0 or hi < full_top
+    span = max(1e-9, hi - lo)
+    pad = TW / 2 if windowed else 0.0
+
+    def xpos(v, x0, w):
+        """Map a composite onto the axis. `pad` keeps the two extreme thumbs fully inside."""
+        return x0 + pad + ((v - lo) / span) * max(1.0, w - 2 * pad)
+
+    def ticks():
+        """Tick positions: 0.1 as it always was, finer when fitted to a narrow band (a 0.90-0.96
+        window would otherwise draw one tick or none). Mirrors the web UI."""
+        if not windowed:
+            v = 0.0
+            while v <= hi + 1e-9:
+                yield round(v, 10)
+                v += 0.1
+            return
+        step = next((s for s in (0.0025, 0.005, 0.01, 0.02, 0.05, 0.1) if s >= (hi - lo) / 6), 0.1)
+        v = math.ceil(lo / step) * step
+        while v <= hi + 1e-9:
+            yield round(v, 6)
+            v += step
+
+    def tick_label(v):
+        return f"{v:.3f}".rstrip("0").rstrip(".") if windowed else f"{v:.1f}"
+
+    def axis_caption():
+        if windowed:
+            return (f"axis {lo:.2f} -> {hi:.3f} · the top {len(plotted)} of {len(done)} scored"
+                    + (f"; {outside} below the window" if outside else ""))
+        return f"axis 0 -> {hi:.1f} (best photo {maxc:.3f})"
+
     reg = {}                                     # unique thumbnails, embedded once each
 
     def place(group, x0, w):
         """Put one group's thumbs on the shared axis, stacking into lanes when they overlap."""
         lanes, out = [], []
         for it in group:
-            x = x0 + (composite(it) / top) * w
+            x = xpos(composite(it), x0, w)
             lane = 0
-            while lane < LANES_MAX and lane < len(lanes) and abs(x - lanes[lane]) < TW + GAP:
+            # Compare against `len(lanes)`, never a constant: an earlier version bounded the search and
+            # then wrote into `lanes[LANES_MAX]` as an overflow bucket, so the Nth photo in a column was
+            # drawn at exactly the same spot as the one before it. Same defect as the web chart
+            # (HANDOFF §4); a tall chart is better than an invisible photo.
+            while lane < len(lanes) and abs(x - lanes[lane]) < TW + GAP:
                 lane += 1
             if lane == len(lanes):
                 lanes.append(x)
@@ -348,24 +408,22 @@ def _pdf_chart(doc, items, by_pose=False):
         ranks[id(it)] = len(done) - i
 
     if not by_pose:
-        placed = place(done, MARGIN, CONTENT_W)
+        placed = place(plotted, MARGIN, CONTENT_W)
         max_lane = max(l for _, _, l in placed)
         # reserve, above the axis: lane*ROW per lane + one lane's content (score 4 + gap 9 +
         # thumb <=60 + rank 8 <= 81 <= ROW); below the axis: tick labels. Keeps stacked thumbs
         # from ever reaching the heading above.
         doc._need(max_lane * ROW + 84 + 34)
         doc.text("Composite by photo", size=11, bold=True)
-        doc.small(f"axis 0 -> {top:.1f} (best photo {maxc:.3f}) · our arithmetic, min(face, eyes) × "
+        doc.small(f"{axis_caption()} · our arithmetic, min(face, eyes) × "
                   f"pose weight — not a model probability · thumbs stack when they would overlap")
         doc.spacer(4)
         y_axis = doc.y - (max_lane * ROW + 84)
         doc.line_at(MARGIN, y_axis, MARGIN + CONTENT_W, y_axis, color=(0.25, 0.29, 0.35), w=1.0)
-        v = 0.0
-        while v <= top + 1e-9:
-            x = MARGIN + (v / top) * CONTENT_W
+        for v in ticks():
+            x = xpos(v, MARGIN, CONTENT_W)
             doc.line_at(x, y_axis, x, y_axis - 4)
-            doc.text_at(f"{v:.1f}", x - 8, y_axis - 13, size=6)
-            v = round(v + 0.1, 10)
+            doc.text_at(tick_label(v), x - 8, y_axis - 13, size=6)
         for it, x, lane in placed:
             draw_thumb(it, x, y_axis + 4 + lane * ROW + 9, ranks[id(it)])
         doc.y = y_axis - 18
@@ -381,7 +439,7 @@ def _pdf_chart(doc, items, by_pose=False):
 
     groups = []
     for key in POSE_ORDER + ["other"]:
-        g = [it for it in done if bucket(it) == key]
+        g = [it for it in plotted if bucket(it) == key]
         if key == "other" and not g:
             continue
         placed = place(g, x0, w)
@@ -394,7 +452,7 @@ def _pdf_chart(doc, items, by_pose=False):
 
     doc._need(total + 34)
     doc.text("Composite by photo, by pose", size=11, bold=True)
-    doc.small(f"axis 0 -> {top:.1f} (best photo {maxc:.3f}) · our arithmetic, min(face, eyes) × "
+    doc.small(f"{axis_caption()} · our arithmetic, min(face, eyes) × "
               f"pose weight — not a model probability · one stratum per pose, in the order the "
               f"pose question lists them; rank badges stay global to the run")
     doc.spacer(4)
@@ -402,11 +460,9 @@ def _pdf_chart(doc, items, by_pose=False):
     chart_bottom = doc.y - total
     y_top = chart_bottom + total
     # gridlines first, so the bands and thumbnails draw over them
-    v = 0.0
-    while v <= top + 1e-9:
-        x = x0 + (v / top) * w
+    for v in ticks():
+        x = xpos(v, x0, w)
         doc.line_at(x, chart_bottom, x, y_top, color=(0.87, 0.89, 0.92))
-        v = round(v + 0.1, 10)
     y = y_top
     for g in groups:
         floor = y - g["height"]                 # thumbnails and the score sit on this line
@@ -417,15 +473,13 @@ def _pdf_chart(doc, items, by_pose=False):
             draw_thumb(it, x, floor + 4 + lane * ROW + 9, ranks[id(it)])
         y = floor
     doc.line_at(x0, chart_bottom, x0 + w, chart_bottom, color=(0.25, 0.29, 0.35), w=1.0)
-    v = 0.0
-    while v <= top + 1e-9:
-        x = x0 + (v / top) * w
+    for v in ticks():
+        x = xpos(v, x0, w)
         doc.line_at(x, chart_bottom, x, chart_bottom - 4)
-        doc.text_at(f"{v:.1f}", x - 8, chart_bottom - 13, size=6)
-        v = round(v + 0.1, 10)
+        doc.text_at(tick_label(v), x - 8, chart_bottom - 13, size=6)
     doc.y = chart_bottom - 18
 
-def build_pdf(items: list, meta: dict, chart_view: str = "combined") -> bytes:
+def build_pdf(items: list, meta: dict, chart_view: str = "combined", chart_axis: str = "full") -> bytes:
     st = stats(items)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     doc = PDF(title="WikiPortraits Eval report", subtitle=ts)
@@ -475,7 +529,7 @@ def build_pdf(items: list, meta: dict, chart_view: str = "combined") -> bytes:
     for l in lines:
         doc.text(l, size=9)
     doc.spacer(6)
-    _pdf_chart(doc, items, by_pose=(chart_view == "pose"))
+    _pdf_chart(doc, items, by_pose=(chart_view == "pose"), axis=chart_axis)
     doc.spacer(8)
     doc.h2("All images, ranked by composite")
     widths = [14, 128, 44, 44, 40, 44, 34, 36, 32]

@@ -90,6 +90,8 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F21 | Accept an uploaded **list file** (`.txt`/`.csv`) in the browser, for sets too long to travel in a URL | **not shipped** (see roadmap) |
 | F22 | **Share a run as one URL** that replicates it: the list, the run, and the chart view, replayed from cache so opening it cannot spend a call | shipped |
 | F23 | **Plot the chart live**, as results land, so it doubles as the progress display instead of appearing only when the run ends; the axis stretches and thumbnails move rather than the chart arriving all at once | shipped |
+| F24 | **Fit the chart axis to the candidates** (top 12) as well as the whole field, so the photos a reader can use get the full width instead of being stacked deepest — measured on 100 photos, the top 9 need 9 lanes on the whole-field axis and 2 when fitted | shipped |
+| F25 | **Summarise a clump too deep to draw** in a `+N` chip that names what it stands for, rather than letting a band grow without limit or hiding photos silently; placement is best-first so the top of a clump is never the summarised part | shipped |
 
 ## 6. Non-functional requirements
 

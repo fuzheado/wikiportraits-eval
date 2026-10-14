@@ -26,4 +26,27 @@ print(f"extracted {len(js)} chars from {len(blocks)} script block(s)")
 print("node --check:", "OK" if r.returncode == 0 else "FAILED")
 if r.returncode:
     print(r.stderr[:2000])
-sys.exit(r.returncode)
+
+# ---- cross-language constants -------------------------------------------------------------------
+# The "candidates" axis window is implemented twice — once in the page, once in the PDF export — and
+# nothing about the two languages keeps them in step. A reader who switches to candidates on screen
+# and then downloads the PDF would get a different chart, which is the sort of difference nobody
+# reports as a bug. So assert the numbers agree, here, offline, in CI.
+sys.path.insert(0, ROOT)
+import reports  # noqa: E402
+
+shared = {
+    "CANDIDATE_WINDOW": reports.CANDIDATE_WINDOW,
+    "CANDIDATE_FLOOR_RATIO": reports.CANDIDATE_FLOOR_RATIO,
+}
+bad = []
+for name, value in shared.items():
+    pat = re.compile(rf"\bconst {name} = {re.escape(str(value))}\b")
+    if not pat.search(js):
+        found = re.findall(rf"\bconst {name} = ([^;]+)", js)
+        bad.append(f"{name}: reports.py says {value}, index.html says {found or 'nothing'}")
+for b in bad:
+    print(f"  MISMATCH {b}")
+print(f"shared constants: {'agree' if not bad else 'DISAGREE (' + str(len(bad)) + ')'}")
+
+sys.exit(1 if (r.returncode or bad) else 0)

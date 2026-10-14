@@ -1159,12 +1159,15 @@ def _eval_row(item: dict) -> dict:
 
 
 def _report(job, fmt, query=""):
-    # The PDF's chart follows the view the reader had on screen; only the PDF takes a parameter, so
-    # nothing else about the report changes. Parsed by hand rather than with a form decoder.
+    # The PDF's chart follows the view and the axis the reader had on screen; only the PDF takes a
+    # parameter, so nothing else about the report changes. Parsed by hand rather than with a form
+    # decoder. `axis=candidates` must mean the same thing here as in the page — see
+    # reports.CANDIDATE_WINDOW, which the two have to agree on.
     chart_view = "pose" if "view=pose" in (query or "") else "combined"
+    chart_axis = "candidates" if "axis=candidates" in (query or "") else "full"
     meta = {"state": STATE, "questions": QUESTIONS, "elapsed_s": job.get("elapsed_s"),
             "latency": latency_summary(job), "spread": job.get("spread"),
-            "chart_view": chart_view,
+            "chart_view": chart_view, "chart_axis": chart_axis,
             "no_cache": bool(job.get("no_cache")),
             "cached_only": bool(job.get("cached_only")),
             "pdf_path": os.path.join(CACHE_DIR, f"report-{job['id']}.pdf")}
@@ -1180,6 +1183,7 @@ def _report(job, fmt, query=""):
                 reports.build_json(job["items"], meta).encode(),
                 {"Content-Disposition": "attachment; " + name})
     if fmt == "pdf":
-        return (200, "application/pdf", reports.build_pdf(job["items"], meta, chart_view=chart_view),
+        return (200, "application/pdf",
+                reports.build_pdf(job["items"], meta, chart_view=chart_view, chart_axis=chart_axis),
                 {"Content-Disposition": "attachment; " + name})
     return 400, "application/json", json.dumps({"error": "unknown format"}).encode(), {}
