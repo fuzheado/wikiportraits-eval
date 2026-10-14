@@ -34,7 +34,7 @@ PARSE_MAX = int(os.environ.get("PARSE_MAX", "1000"))         # cap /api/parse re
 
 
 # ------------------------------------------------------------------ job store
-def new_job(payload, no_cache=False):
+def new_job(payload, no_cache=False, cached_only=False):
     if isinstance(payload, str):
         parsed = wiclient.parse_entries(payload)
         entries, warnings = parsed["items"], parsed["warnings"]
@@ -42,7 +42,7 @@ def new_job(payload, no_cache=False):
         entries = [{"raw": t, "title": t} for t in payload]
         warnings = []
     job = {"id": uuid.uuid4().hex[:12], "created": time.time(), "status": "queued",
-           "no_cache": bool(no_cache),
+           "no_cache": bool(no_cache), "cached_only": bool(cached_only),
            "progress": {"done": 0, "total": len(entries)}, "warnings": warnings,
            "items": [{"raw": e["raw"], "title": e["title"], "status": "pending",
                       "wiki": e.get("wiki", "commons.wikimedia.org")} for e in entries],
@@ -367,9 +367,13 @@ def run_job(job):
 
     # cache pass first, so the download thread only handles images that need scoring
     bypass = bool(job.get("no_cache"))
+    replay = bool(job.get("cached_only")) and not bypass
     if bypass:
         log(job, "cache bypassed for this run (no_cache) — every photo is scored fresh, "
                  "one model call each")
+    if replay:
+        log(job, "replay (cached_only): scoring from saved answers only, so opening this link "
+                 "cannot spend a model call — anything not already scored is left for you")
     pending = []
     for item in job["items"]:
         if item["status"] == "notfound":
@@ -391,6 +395,12 @@ def run_job(job):
                     log(job, f"{item['title']} — thumbnail not stored: {exc}")
             _derive(item)
             log(job, f"{item['title']} — cached")
+        elif replay:
+            # A shared link must be incapable of spending: no answer on this server means no answer,
+            # not "go and fetch one". The row says so, and Score them is left armed.
+            item["status"] = "uncached"
+            item["error"] = "not scored on this server yet — press Score them to evaluate it"
+            log(job, f"{item['title']} — not in cache (replay)")
         else:
             pending.append(item)
     _progress(job)
@@ -528,7 +538,10 @@ def run_job(job):
     if job["latency"].get("note"):
         log(job, f"latency: {job['latency']['note']}")
     job["elapsed_s"] = round(time.time() - t0, 2)
-    job["status"] = "done" if any(i["status"] == "done" for i in job["items"]) else "error"
+    # A replay that found nothing cached is not a failure — it is information (nobody has scored
+    # these here yet), and the UI should invite a real run rather than show an error.
+    job["status"] = ("done" if (replay or any(i["status"] == "done" for i in job["items"]))
+                     else "error")
     log(job, f"finished in {job['elapsed_s']}s")
 
 
@@ -716,6 +729,12 @@ def about_payload() -> dict:
            "each pose in its own labelled stratum on the same axis, so you can compare photos within "
            "a pose. Rank numbers stay global in both views. The <b>PDF report exports whichever "
            "view you are looking at</b> — its chart switches with the same control.</p>"
+           "<p>A finished run can be shared as <b>one link</b> (the <i>Copy share link</i> "
+           "button under the results). The link carries the file list and the chart view, and "
+           "<b>replays from saved answers only</b> — so opening it shows the same graph at once "
+           "and can never spend a model call. Anything this server has not scored stays in the "
+           "list, marked as not scored, with <i>Score them</i> armed for the person reading it."
+           "</p>"
            "<p>So each run reports, per headline number:</p><ul>"
            "<li><b>candidates</b> — how many photos score at or above the candidate floor "
            f"(<code>{CANDIDATE_FLOOR}</code>, set by <code>CANDIDATE_FLOOR</code>);</li>"
@@ -937,7 +956,8 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                 if len(active) >= MAX_PARALLEL_JOBS:
                     return js({"error": "another run is already in progress"}, 409)
                 job = new_job(data.get("items") or data.get("text", ""),
-                              no_cache=data.get("no_cache"))
+                              no_cache=data.get("no_cache"),
+                              cached_only=data.get("cached_only"))
                 if not job["items"]:
                     return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
                 if len(job["items"]) > MAX_INPUT_ITEMS:
@@ -984,6 +1004,7 @@ def _report(job, fmt, query=""):
             "latency": latency_summary(job), "spread": job.get("spread"),
             "chart_view": chart_view,
             "no_cache": bool(job.get("no_cache")),
+            "cached_only": bool(job.get("cached_only")),
             "pdf_path": os.path.join(CACHE_DIR, f"report-{job['id']}.pdf")}
     name = f'filename="wikiportraits-{job["id"]}.{fmt}"'
     if fmt == "md":

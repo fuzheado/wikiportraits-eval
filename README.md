@@ -109,6 +109,7 @@ links straight into the tool:
 ```
 https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg
 https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&check=1
+https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&run=1&view=pose
 ```
 
 - **`?list=`** fills the box. Entries are separated by `%0A` (a newline) — **deliberately the only
@@ -116,9 +117,19 @@ https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&check=1
   those characters must never be treated as delimiters here.
 - **`&check=1`** additionally presses **Validate files**, so the link lands showing "12 of 12 resolved"
   and an armed Score button.
+- **`&run=1`** replays the run from **saved answers only** — the same list, so the chart appears at
+  once for whoever opens it, and **no model call is ever made**. Anything this server has not scored
+  is left in the list marked *"not scored yet — press Score them"*, with Score them armed and blue, so
+  spending remains a deliberate act by the person looking at it.
+- **`&view=pose`** (or `view=combined`) reproduces the chart view, so a link can point at the strata
+  rather than the single axis.
+- **The simplest way to get one is the app's own `Copy share link` button**, which appears under the
+  results after a run and builds exactly this URL for the run you are looking at.
 - Build links with `encodeURIComponent` in your language (`encodeURIComponent('File:A.jpg\nFile:B.jpg')`).
   Percent-encode a literal `+` as `%2B`, or it will arrive as a space.
-- **A link never starts a run.** Scoring spends a model call per photo, so it always takes a click.
+- **A link can never spend.** `&check=1` and `&run=1` are bounded to *reading* — Commons lookups
+  (cached, and one batched call per wiki) and saved answers. Scoring, one model call per photo, always
+  takes a click from a person looking at the page.
 - The parameters are dropped from the address bar as soon as they are read, so a reload or a copied
   link cannot replay them.
 - Caps: links longer than ~4,000 characters are refused, and the input check is never run
@@ -134,6 +145,7 @@ POST /api/parse  '{"text": "Foo.jpg\nBar.jpg"}'              # resolve + metadat
 POST /api/eval   '{"files": ["File:A.jpg", "File:B.jpg"]}'   # blocked; final ranked results (≤ EVAL_MAX)
 POST /api/run    '{"text": …}'                               # async; poll GET /api/job/<id>
                  # add "no_cache": true to re-score every photo instead of reusing saved answers
+                 # add "cached_only": true to replay from saved answers and never call the model
 GET  /api/default-list                                        # the sample list (default_list.txt)
 GET  /api/job/<id>/report.{md,json,csv,pdf}                   # reports for a finished job
                  # report.pdf?view=pose exports the by-pose chart rather than the combined one

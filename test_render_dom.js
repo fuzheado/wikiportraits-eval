@@ -371,13 +371,14 @@ function finish() {
   // can assert the two rules that matter: a link may prefill and (with check=1) press Validate files,
   // but it must NEVER cause a run, and it must never split on a comma.
   function withUrl(search) {
-    const calls = [];
+    const calls = [], bodies = [];
     const d2 = new JSDOM(html, {
       runScripts: 'dangerously', pretendToBeVisual: true,
       url: 'https://example.test/' + search,
       beforeParse(window) {
-        window.fetch = async (url) => {
+        window.fetch = async (url, opts) => {
           calls.push(String(url));
+          if (opts && opts.body) bodies.push(String(opts.body));
           return {
             ok: true, status: 200,
             json: async () => {
@@ -396,7 +397,7 @@ function finish() {
         };
       },
     });
-    return { win: d2.window, doc: d2.window.document, calls,
+    return { win: d2.window, doc: d2.window.document, calls, bodies,
              ran: () => calls.some((u) => u.includes('/api/run')),
              parsed: () => calls.some((u) => u.includes('/api/parse')),
              box: () => d2.window.document.getElementById('input').value };
@@ -439,10 +440,53 @@ function finish() {
   ok(lines(capped.box()) === 60, 'a 60-entry link still prefills (only the auto-check is capped)');
   ok(!capped.parsed(), 'more than 50 entries is not auto-checked');
 
+  // ?run=1 is the share-link case: it must show the graph at once and still be unable to spend
+  const replay = withUrl('?list=' + encodeURIComponent('File:A.jpg\nFile:B.jpg') + '&run=1');
+  await new Promise((r) => setTimeout(r, 40));
+  ok(replay.ran(), '?run=1 starts a run, so the graph appears without anyone clicking');
+  ok(replay.bodies.some((b) => b.indexOf('"cached_only":true') !== -1),
+     'and that run is cache-only — opening a shared link cannot spend a model call');
+  ok(!replay.bodies.some((b) => b.indexOf('"no_cache":true') !== -1),
+     'a replay never asks to re-score anything');
+  ok(!replay.parsed(), '?run=1 does not also spend an extra validate round-trip');
+
+  const posedLink = withUrl('?list=' + encodeURIComponent('File:A.jpg') + '&view=pose');
+  ok(posedLink.doc.getElementById('cm-pose').classList.contains('active'),
+     '?view=pose reproduces the by-pose chart');
+  const plainLink = withUrl('?list=' + encodeURIComponent('File:A.jpg'));
+  ok(plainLink.doc.getElementById('cm-combined').classList.contains('active'),
+     'a plain ?list= link stays on the combined chart (the default)');
+
   const huge = withUrl('?list=' + 'A'.repeat(5000));
   ok(huge.box() === '', 'an over-long ?list= is refused outright, not prefilled');
   ok(/too long/.test(huge.doc.getElementById('parseinfo').textContent),
      'and it says why');
+
+  // ---- 9. the share link reproduces this run ------------------------------------------------
+  // Re-render first: the validate flow in section 7 clears the previous run (including
+  // lastJob), so the share button would have nothing to describe.
+  render(job(mixed, { status: 'done',
+    stats: { n_scored: 4, n_input: 4, composite_mean: 0.55, p_publish_mean: 0.5,
+             p_infobox_mean: 0.5, p_infobox_median: 0.5, p_infobox_max: 0.5,
+             n_above_half: 2, quality_mean: 2.5, tokens_total: 100,
+             wall_median_s: 0.5, wall_total_s: 2, poses: {}, n_429: 0 } }));
+  doc.getElementById('cm-pose').click();
+  // Asked for: one URL that shows someone the same files and immediately draws the graph, with a
+  // flag for combined vs by pose. The load-bearing part is that it replays from cache only.
+  doc.getElementById('share').click();
+  await new Promise((r) => setTimeout(r, 10));
+  const shareBox = doc.getElementById('shareurl');
+  ok(/[?&]list=/.test(shareBox.value), 'the share link carries the list');
+  ok(/[?&]run=1/.test(shareBox.value), 'and asks the receiving page to replay it at once');
+  ok(decodeURIComponent(shareBox.value).indexOf('File:Posed.jpg') !== -1,
+     "the list is the run's own titles, so the recipient sees the same photos");
+  ok(/[?&]view=pose/.test(shareBox.value), 'from the by-pose view the link carries view=pose');
+  doc.getElementById('cm-combined').click();
+  doc.getElementById('share').click();
+  await new Promise((r) => setTimeout(r, 10));
+  ok(!/[?&]view=pose/.test(shareBox.value), 'and from the combined view it does not');
+  ok(/Copied|Press/.test(doc.getElementById('share').textContent),
+     'the button says whether it managed to copy to the clipboard');
 
   finish();
 })();

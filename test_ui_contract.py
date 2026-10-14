@@ -87,6 +87,9 @@ required = {
     "deep links press Validate files, never Score them":
         '$("check").click()' in js and '$("run").click()' not in js,
     "deep links have a hard length cap": 'URL_LIST_HARD_MAX' in js,
+    # a share link may replay a run, but only from cache — it must be incapable of spending
+    "the share link replays from cache only": 'cached_only: replay' in js,
+    "the share link carries the chart view": 'q.set("view", "pose")' in js,
     # the exported PDF chart must follow the on-screen view, so the download URL carries it
     "the PDF export carries the chart view": 'view=pose' in js and 'chartMode' in js,
     "rows are created once (keyed map)": "const rows = new Map()" in js and "rowFor(" in js,

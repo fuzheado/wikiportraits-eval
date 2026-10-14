@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.12.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.13.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -16,7 +16,7 @@ App version 0.12.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 
 | `wiclient.py` | input parsing → `File:` titles, per-wiki Commons API resolution, thumbnail fetch, model call, budget/pacing |
 | `reports.py`, `pdfmin.py` | Markdown/JSON/CSV/PDF output; `pdfmin.py` is a dependency-free PDF writer |
 | `static/index.html` | the whole UI: incremental list rendering, per-row clock, latency panel, About modal |
-| | *Deep links:* `?list=` (newline-separated paste text, `%0A`) prefills; `&check=1` also presses Validate files, capped at 50 entries; over ~4,000 chars is refused. Never starts a run; params are stripped via `replaceState` so a reload cannot replay them. Caps are client-side only because the server caps independently (`PARSE_MAX`, `MAX_INPUT_ITEMS`) and never sees the query string. |
+| | *Deep links:* `?list=` (newline-separated paste text, `%0A`) prefills; `&check=1` also presses Validate files, capped at 50 entries; `&run=1` starts a **cache-only replay** (never spends); `&view=pose|combined` reproduces the chart view. The UI's **Copy share link** builds exactly this URL from a finished run. Over ~4,000 chars is refused. Never starts a run; params are stripped via `replaceState` so a reload cannot replay them. Caps are client-side only because the server caps independently (`PARSE_MAX`, `MAX_INPUT_ITEMS`) and never sees the query string. |
 | | *Section 2 is deliberately compact* (a 2026-10-14 report: "section 2 reads very busy and is overwhelming"). The run stats are **two one-line strips** — `Scores` (with `mean quality` folded in) and `Time & tokens` — not a grid of big boxes; **candidate spread is a collapsed `<details>`** whose one-liner still carries the candidate counts. Do not reintroduce the box grid or a 22px heading here; `test_render_dom.js` asserts two strips, no `statgroup`, and a closed `<details>`. |
 | | *Chart views:* `chartMode` is `combined` (default) or `pose`; `setChartMode()` persists it in localStorage and re-renders. By-pose gives every pose its own labelled band on a shared x axis with vertical gridlines, so photos can be compared *within* a pose; rank badges stay global so a photo keeps its number in both views. Tests assert 5 strata (empty ones included, as thin labelled lines), that gridlines appear only in pose mode, and that the default has neither. **The PDF export follows the same setting:** the UI appends `?view=pose` to the report URL, `route()` takes a `query` argument (both backends pass it; `path` stays query-free so deep links still route), `_report()` reads it into `meta[chart_view]`, and `reports.build_pdf(..., chart_view=)` draws the strata. Only the PDF takes the parameter; the other three formats ignore it. |
 | | *UI state to keep:* `setStage(idle|checked|running|done)` owns which button is blue and whether **Score them** is enabled — the blue highlight is the only thing telling a first-time user which step is next, and editing the list must send the flow back to `idle`. `test_render_dom.js` asserts the whole cycle. The input box must start empty (invariant 12). |
@@ -142,7 +142,10 @@ UI changes.**
     next time.
     **One explicit exception:** a URL carrying `?list=` may prefill (see §1 and the memo below). That
     does not violate the purpose — nothing appears unbidden, and a link may press *Validate files* but
-    **must never start a run** (scoring spends a call per photo, so it always takes a click). The URL
+    **must never start a *spending* run**. `&run=1` is allowed only as a **cache-only replay**
+    (`cached_only`), which resolves the list and serves saved answers while making zero model calls —
+    that is what makes a shareable link safe to open, and `test_pipeline.py` asserts the zero both warm
+    and cold. Scoring, one call per photo, still takes a click. The URL
     layer must also not grow a second splitter: `?list=` is newline-separated only, because a comma
     occurs in real file names and `|` occurs in the wikitext form the app advertises.
     `test_ui_contract.py` asserts `split(",")` appears nowhere in the page script and that the
@@ -244,6 +247,11 @@ fails the suite instead of shipping.
   mirrored bands). Anything that maps a data category onto a screen position needs that check.
 - **`quality` is defined only by its five legend labels** (0 unusable … 4 excellent) and by the
   640 px image the model actually sees. Do not describe it as a sharpness or lighting measurement.
+- **A disabled button fires no click event, so a deep link must call the function, not the control.**
+  `?run=1` did nothing at all until this was fixed (2026-10-14): the URL handler called
+  `$("run").click()` while `setStage("idle")` had the button disabled, and the click was swallowed.
+  The handler body is now `startRun()`, which both the button and the deep link call — and any future
+  "programmatically press this control" shortcut has to check the control's state first.
 - **The advertised Python floor was a lie until 2026-10-14.** README said "Python 3.9+" while
   `pdfmin.py` used `-> str | None` (PEP 604). That is evaluated when the *class is defined*, so on 3.9
   importing `pdfmin` raised `TypeError: unsupported operand type(s) for |` and took out every test

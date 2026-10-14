@@ -84,6 +84,11 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F15 | Show a rank within the run next to each photo, and a percentile | **rank shipped**, percentile pending |
 | F16 | Report candidate spread for the run (range and ordering among plausible candidates) | shipped |
 | F17 | Accept a **PagePile** ID (or a PetScan/SPARQL-produced list) as the input source, with an explicit member cap and a confirmation step | **not shipped** (see roadmap) |
+| F18 | Accept a Commons **category** (optionally with depth) as the input source, with a cap, an explicit ordering rule and a confirmation step | **not shipped** (see roadmap) |
+| F19 | Accept a **Commons search / SDC query** as the input source (`srsearch=`, e.g. `haswbstatement:P180=Q…` for "every photo of this person") | **not shipped** (see roadmap) |
+| F20 | Accept a **PetScan PSID** as the input source — one integration that inherits categories, depth, templates, search and SPARQL, with union/subset/difference | **not shipped** (see roadmap) |
+| F21 | Accept an uploaded **list file** (`.txt`/`.csv`) in the browser, for sets too long to travel in a URL | **not shipped** (see roadmap) |
+| F22 | **Share a run as one URL** that replicates it: the list, the run, and the chart view, replayed from cache so opening it cannot spend a call | shipped |
 
 ## 6. Non-functional requirements
 
@@ -253,6 +258,25 @@ Downloads for later photos run in a background thread while the model answers fo
 
 **Next**
 - Report candidate spread for each run (range and ordering among plausible candidates).
+- **Input sources, in the order worth doing them** (F17–F21). Each returns `File:`
+  titles, which the app already resolves — the work is the *selection* UX and the caps, not the API:
+  1. **PagePile ID** (F17) — one fixed-host call with a numeric id. Smallest and most shareable.
+  2. **Commons category, with depth** (F18) — depth needs `deepcategory:` (CirrusSearch, ≤5 levels) or
+     PetScan. A cap is not enough: *which* 200 of 1,240 is a product decision (name order? newest?
+     random?) and must be stated at the point of confirmation.
+  3. **Commons search / SDC** (F19) — `srsearch=…&srnamespace=6`, e.g. `haswbstatement:P180=Q42`
+     ("files depicting this person"), `hastemplate:`, `deepcategory:`. **`srnamespace` is
+     mandatory**: without it the search runs in namespace 0 and "0 hits" reads as an empty corpus
+     (0 vs 363,459 in the audit recorded in the search skill).
+  4. **Uploaded list file** (F21) — purely client-side, so it has no fetch or security surface, and it
+     is the answer to the ~4,000-character link ceiling for a spreadsheet paste.
+  5. **PetScan PSID** (F20) — widest coverage (it can express 1–4 as one id), at the price of depending
+     on another tool staying up and its result set staying reproducible.
+  Two more, deliberately out of rank order because they need a decision, not plumbing: **"uploads by a
+  user"** (`list=allimages&aiuser=…`, which **requires `aisort=timestamp`** — without it the API answers
+  `invalidparammix`, verified 2026-10-14) and **non-Commons hosts** (Flickr, Internet Archive, a GLAM
+  DAM), which would mean fetching foreign URLs, displaying foreign licences and — per §9 — a new trust
+  decision rather than a new source. Prefer the Flickr→Commons path the skills already document.
 - Validation run: 12+ portraits, today's wording vs the two-option `choice` vs the composite.
 - `Category:` / PetScan / SPARQL / **PagePile ID** input with an explicit cap and confirmation step.
   PagePile (F17) is the least work of the four and the most shareable: one fixed-host call with a

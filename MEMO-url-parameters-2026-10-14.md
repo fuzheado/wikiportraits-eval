@@ -20,7 +20,7 @@ correction is marked.
 | 4 | `?list=default` alias for `/api/default-list` | low — a short demo link | very low | optional |
 | 5 | `?job=<id>` results deep link | high for sharing | needs durable job storage (jobs are in-memory and wiped on restart, §7.4) | defer |
 | 6 | `?listurl=<url>` (server fetches the list) | low — paste and `POST /api/run` already cover it | **high** — SSRF, open fetcher, proxy abuse | **refuse** |
-| 7 | `?run=1` auto-start | low — `check=1` leaves one click | **high** — spends from a link, with the ceiling unenforced | **refuse** |
+| 7 | `?run=1` auto-start | low — `check=1` leaves one click | **high** — spends from a link, with the ceiling unenforced | **refused as asked; shipped in one bounded form** — see below |
 
 **Built the same day (v0.9.0): options 1 and 2, with a 50-entry action cap.** One correction to the
 grammar above, and it matters: **the `|` shorthand was dropped.** `|` cannot appear in a MediaWiki
@@ -37,7 +37,16 @@ params are stripped from the address bar with `replaceState` so a reload cannot 
 measured in §3); auto-check is capped at 50 entries. All of it is client-side, so the server-side
 surface is unchanged: `/api/parse` sees an ordinary request and keeps `PARSE_MAX` / `MAX_INPUT_ITEMS`.
 
-**Not built, deliberately:** `?listurl=` (§4), `?run=1` (§5), and `?fresh=1` — the last one is a
+**Later addition (v0.13.0): `?run=1` as a *cache-only replay*.** The owner asked for a shareable link
+that "immediately loads the graph". The refusal above assumed auto-start must mean *spending*, and it
+need not: a new `cached_only` mode resolves the list and serves saved answers with **zero model
+calls**, marking anything unscored as unscored and leaving Score them armed. So the sharing case —
+the one that motivated the request — is exactly the case where nothing is spent, because the sharer
+already paid for those answers on the same server. The §5 objection (a link that spends without a
+human deciding) is therefore untouched, and `test_pipeline.py` asserts the zero both warm and cold.
+`?view=` came with it, so a link reproduces the chart view too.
+
+**Still not built, deliberately:** `?listurl=` (§4) and `?fresh=1` — the last one is a
 one-liner but it was not part of the approved scope, and it is the half of auto-start that would spend
 without a click.
 

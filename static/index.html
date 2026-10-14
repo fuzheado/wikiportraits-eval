@@ -71,6 +71,7 @@
   .st-ready{background:#f3f1ff;color:#4a3b8f}
   .st-scoring{background:#fff6e5;color:var(--amber)}
   .st-done{background:#eaf6ee;color:var(--green)}
+  .st-uncached{background:#eef2f7;color:var(--muted)}
   .st-error,.st-notfound{background:#fdecec;color:var(--red)}
   .log{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);
        white-space:pre-wrap;max-height:180px;overflow:auto}
@@ -226,6 +227,12 @@
       <button id="dl-csv" disabled>CSV</button>
       <button id="dl-pdf" disabled>PDF</button>
     </div>
+    <div class="row" id="sharerow" style="margin-top:8px" hidden>
+      <button id="share" title="A single link that reproduces this run: the same list, the same view, replayed from saved answers so opening it cannot spend a model call">Copy share link</button>
+      <input id="shareurl" readonly spellcheck="false"
+             style="flex:1 1 320px;font:12px ui-monospace,Menlo,monospace;padding:6px 8px;border:1px solid var(--line);border-radius:8px"
+             placeholder="…">
+    </div>
     <div id="items" style="margin-top:12px"></div>
     <details style="margin-top:10px"><summary class="meter">Run log</summary>
       <div id="log" class="log"></div></details>
@@ -283,7 +290,8 @@ function rankOf(it) {
 // here and waiting for its turn at the model, which can be minutes when the endpoint is slow.
 const STATUS_LABEL = {pending: "queued", downloading: "downloading thumbnail",
                       ready: "ready · queued for the model", scoring: "scoring",
-                      done: "done", error: "error", notfound: "not found"};
+                      done: "done", error: "error", notfound: "not found",
+                      uncached: "not scored yet — press Score them"};
 
 function renderBody(it) {
   const r = it.result || {}, a = r.answers || {};
@@ -556,6 +564,8 @@ function markChartSize() {
   ["s", "m", "l"].forEach(k => { const b = $("cs-" + k); if (b) b.classList.toggle("active", k === chartSize); });
 }
 ["s", "m", "l"].forEach(k => { const b = $("cs-" + k); if (b) b.onclick = () => setChartSize(k); });
+markChartSize();
+markChartMode();
 
 function renderStats(job) {
   const s = job.stats || {};
@@ -613,7 +623,12 @@ function renderJob(job) {
   const fresh = doneItems.filter(i => !i.from_cache).length;
   // always say how much of this run actually spent a call — "how much am I using" is a fair
   // question to be able to answer without opening the About panel
-  $("freshness").innerHTML = job.no_cache
+  const uncachedN = (job.items || []).filter(i => i.status === "uncached").length;
+  $("freshness").innerHTML = job.cached_only
+    ? `<span class="ok">replayed from cache</span> · ${doneItems.length} already scored here, ${uncachedN} not`
+      + (uncachedN ? ` — press <b>Score them</b> to evaluate ${uncachedN === 1 ? "it" : "those"} (one model call each)` : "")
+      + " · no model calls were made"
+    : job.no_cache
     ? `<span class="warn">cache bypassed — scoring fresh</span> · ${fresh} of ${doneItems.length}`
       + ` finished photo${doneItems.length === 1 ? "" : "s"} cost a model call`
     : (doneItems.length
@@ -654,9 +669,13 @@ function renderJob(job) {
   if (job.budget) setBudget(job.budget);
   const any = (job.items || []).some(i => i.status === "done");
   ["dl-md", "dl-json", "dl-csv", "dl-pdf"].forEach(id => $(id).disabled = !any);
+  $("sharerow").hidden = !(job.items || []).some(i => i.title);
   if (job.status === "done" || job.status === "error") {
     clearInterval(timer); timer = null;
-    setStage("done");
+    // a replay that could not answer everything leaves the *spending* action armed and
+    // highlighted — that is the one thing the reader should do next
+    setStage(job.cached_only && (job.items || []).some(i => i.status === "uncached")
+             ? "checked" : "done");
   }
 }
 
@@ -738,6 +757,8 @@ function clearResults() {
   $("jobstate").textContent = "idle";
   ["md", "json", "csv", "pdf"].forEach(f => $("dl-" + f).disabled = true);
   $("chartsizerow").hidden = true;
+  $("sharerow").hidden = true;
+  $("shareurl").value = "";
   setStage("idle");
 }
 
@@ -833,21 +854,47 @@ $("check").onclick = async () => {
   } finally { $("check").disabled = false; }
 };
 
-$("run").onclick = async () => {
+async function startRun() {
   if (!(await askNewRun())) return;      // the previous run's cards are about to be discarded
   clearResults();
   setStage("running");
+  // a link that arrived with ?run=1 replays from cache only, so opening it cannot spend
+  const replay = urlReplay;
+  urlReplay = false;
   const r = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: $("input").value, no_cache: $("nocache").checked }) });
+    body: JSON.stringify({ text: $("input").value, no_cache: $("nocache").checked,
+                           cached_only: replay }) });
   const d = await r.json();
   if (!r.ok) { $("jobstate").textContent = d.error || "could not start"; setStage("checked"); return; }
   jobId = d.job_id;
   clearInterval(timer); timer = setInterval(poll, 1000); poll();
-};
+}
+$("run").onclick = () => startRun();
 
 // The PDF's chart follows whatever view is on screen, so a reader who switched to "by pose"
 // exports the strata they were looking at. Only the PDF takes a parameter; the other three
 // formats are unaffected.
+// One link that reproduces this run: the same list, the same chart view, and ?run=1 so the
+// receiving page replays itself from saved answers — cache-only, so opening it cannot spend.
+$("share").onclick = async () => {
+  const titles = ((lastJob || {}).items || []).map(i => i.title).filter(Boolean);
+  if (!titles.length) return;
+  const q = new URLSearchParams({ list: titles.join("\n"), run: "1" });
+  if (chartMode === "pose") q.set("view", "pose");
+  const url = `${location.origin}${location.pathname}?${q.toString()}`;
+  const box = $("shareurl");
+  if (url.length > URL_LIST_HARD_MAX) {
+    box.value = `this list is too long for a share link (${url.length} of ${URL_LIST_HARD_MAX} characters) — send the list, or the JSON report`;
+    box.select();
+    return;
+  }
+  box.value = url;
+  box.select();
+  try { await navigator.clipboard.writeText(url); $("share").textContent = "Copied ✓"; }
+  catch (e) { $("share").textContent = "Press ⌘C / Ctrl-C"; }
+  setTimeout(() => { $("share").textContent = "Copy share link"; }, 2500);
+};
+
 ["md", "json", "csv", "pdf"].forEach(f => {
   $("dl-" + f).onclick = () => {
     if (!jobId) return;
@@ -902,12 +949,17 @@ $("input").addEventListener("input", () => {
 // This is a client-side feature: the server never sees the query string, and `?check=1` merely
 // presses the same button a user would, so it adds no server-side capability an ordinary paste and
 // click does not already have (the server keeps its own caps: PARSE_MAX, MAX_INPUT_ITEMS).
+// set by ?run=1: the next run replays from cache only, so a shared link can never
+// spend a model call. Consumed by the run handler, so a later manual click is normal.
+let urlReplay = false;
 const URL_LIST_SOFT_MAX = 2000;    // beyond this a link stops being emailable or bookmarkable
 const URL_LIST_HARD_MAX = 4000;    // refuse outright; the pod logs the whole query string verbatim
 const URL_LIST_ACTION_MAX = 50;    // and never auto-check more entries than this
 
 function applyUrlParams() {
   const qs = new URLSearchParams(location.search);
+  // the chart view is a display preference, so honour it even without a list
+  if (qs.get("view") === "pose") setChartMode("pose");
   const raw = qs.get("list");
   if (raw === null) return;                        // no ?list= : the box stays empty (invariant 12)
   // drop the params immediately, so a reload or a copied address bar cannot replay them
@@ -922,12 +974,16 @@ function applyUrlParams() {
   $("input").value = text;
   $("input").classList.remove("hint-off");
   setStage("idle");                                // loaded, not validated: Validate files is next
+  const wantsRun = qs.get("run") === "1";
   $("parseinfo").textContent = `${n} photo${n === 1 ? "" : "s"} came from the link`
     + (raw.length > URL_LIST_SOFT_MAX ? " (long link — pasting is more reliable)" : "")
-    + (qs.get("check") === "1" && n > URL_LIST_ACTION_MAX
-        ? ` — not auto-checked: more than ${URL_LIST_ACTION_MAX} entries`
-        : " — press Validate files");
-  if (qs.get("check") === "1" && n <= URL_LIST_ACTION_MAX) $("check").click();
+    + (wantsRun
+        ? " — replaying from saved answers (no model calls)"
+        : qs.get("check") === "1" && n > URL_LIST_ACTION_MAX
+          ? ` — not auto-checked: more than ${URL_LIST_ACTION_MAX} entries`
+          : " — press Validate files");
+  if (wantsRun) { urlReplay = true; startRun(); }
+  else if (qs.get("check") === "1" && n <= URL_LIST_ACTION_MAX) $("check").click();
 }
 applyUrlParams();
 </script>

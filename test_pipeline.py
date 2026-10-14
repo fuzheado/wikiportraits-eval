@@ -201,8 +201,50 @@ if not fresh.get("no_cache"):
 if not any("cache bypassed" in line for line in fresh["log"]):
     failures.append("a no_cache run does not say so in the run log")
 
+# --- a cache-only replay must be INCAPABLE of spending a model call -------------------------
+# This is the property that makes a shareable link safe to open, so it is asserted both ways:
+# warm (the answers are here) and cold (they are not).
+warm = core.new_job("\n".join(f"File:Test {n}.jpg" for n in range(1, N + 1)), cached_only=True)
+JOB = warm
+before = model_calls()
+core.run_job(warm)
+spent_warm = model_calls() - before
+if spent_warm != 0:
+    failures.append(f"a cached-only replay spent {spent_warm} calls (must be 0)")
+if not all(i.get("from_cache") for i in warm["items"] if i["status"] == "done"):
+    failures.append("a warm replay did not serve every photo from cache")
+if any(i["status"] == "uncached" for i in warm["items"]):
+    failures.append("a warm replay reported items as uncached")
+if warm["status"] != "done":
+    failures.append(f"a warm replay ended {warm['status']}")
+
+# "cold" has to mean an empty cache, not different titles: fake_resolve numbers pageids by
+# position, so a fresh list of titles would collide with the earlier run's keys and every lookup
+# would hit. Point CACHE_DIR at a new directory instead — that is what "this server has never
+# scored these photos" actually looks like.
+real_cache = core.CACHE_DIR
+core.CACHE_DIR = tempfile.mkdtemp(prefix="wp-replay-cold-")
+try:
+    cold = core.new_job("\n".join(f"File:Test {n}.jpg" for n in range(1, N + 1)), cached_only=True)
+    JOB = cold
+    before = model_calls()
+    core.run_job(cold)
+    spent_cold = model_calls() - before
+finally:
+    core.CACHE_DIR = real_cache
+if spent_cold != 0:
+    failures.append(f"a cold replay spent {spent_cold} calls (must be 0)")
+if not all(i["status"] == "uncached" for i in cold["items"]):
+    failures.append(f"a cold replay should mark every photo uncached: "
+                    f"{[i['status'] for i in cold['items']]}")
+if cold["status"] != "done":
+    failures.append("a cold replay is information, not an error — status should be done")
+if not any("not in cache" in line for line in cold["log"]):
+    failures.append("a cold replay does not say why nothing was scored")
+
 print(f"cache             : repeat run {n_cached}/{N} cached with {spent_repeat} calls; "
       f"no_cache re-scored all {N} ({spent_fresh} calls) in {fresh.get('elapsed_s')}s")
+print(f"replay            : warm {spent_warm} calls, all from cache; cold {spent_cold} calls, all marked uncached")
 print(f"mid-run snapshots : {snapshots}")
 print(f"downloads overlapping a model call: {overlaps}")
 print(f"latency summary  : {lat}")
