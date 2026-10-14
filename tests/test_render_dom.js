@@ -302,6 +302,68 @@ ok(bands.length === 5 && bands.map((b) => b.name).join(',') ===
    'head & shoulders,three-quarter,full body,group,candid',
    `the bands are labelled and ordered as the poses are (got ${bands.map((b) => b.name).join(',')})`);
 
+// ---- 4e. the chart is LIVE: it plots as results land, and it does not rebuild itself -------------
+// The chart used to be blanked until the job finished, so nothing appeared until the very end. It now
+// draws whatever has landed, which also makes it the progress display. The risk in redrawing on every
+// poll is the one invariant 3 describes — re-creating the nodes would re-fetch every <img> and flash
+// the chart — so this asserts both halves: that it draws early, and that the nodes and their src
+// survive the redraws.
+console.log('live chart');
+const liveItem = (n, comp) => {
+  const a = fullAnswers(0.5, 0.5, 0.9, 0.9, 'head_shoulders');
+  return item('done', { pageid: 700 + n, title: `File:Live ${n}.jpg`, raw: `File:Live ${n}.jpg`,
+                        composite: comp, publish_p: 0.5,
+                        result: { wall_s: 0.6, usage: {}, answers: a } });
+};
+const pendingItem = (n) => item('scoring', { pageid: 800 + n, title: `File:Pending ${n}.jpg`,
+                                             raw: `File:Pending ${n}.jpg` });
+const liveStats = { n_scored: 3, n_input: 3, composite_mean: 0.59, p_publish_mean: 0.5,
+                    p_infobox_mean: 0.5, p_infobox_median: 0.5, p_infobox_max: 0.5, n_above_half: 3,
+                    quality_mean: 2.5, tokens_total: 100, wall_median_s: 0.6, wall_total_s: 1.8,
+                    poses: {}, n_429: 0 };
+const liveJob = (items, extra) => job(items, { id: 'live', stats: liveStats, ...extra });
+const liveThumbs = () => [...doc.querySelectorAll('#chart .cthumb')];
+const caption = () => doc.querySelector('#chart .meter').textContent;
+const axisOf = () => {
+  const m = /axis 0 → ([\d.]+)/.exec(caption());
+  return m ? parseFloat(m[1]) : NaN;
+};
+
+// one photo in, two still running
+const lerr = render(liveJob([liveItem(1, 0.40), pendingItem(2), pendingItem(3)],
+                            { progress: { done: 1, total: 3 } }));
+ok(lerr === null, `a running job renders without throwing${lerr ? `: ${lerr.message}` : ''}`);
+ok(liveThumbs().length === 1,
+   `the chart plots the photo that has landed while the run is still going (got ${liveThumbs().length})`);
+ok(/1 of 3 scored/.test(caption()), `the caption doubles as the progress display (got "${caption().slice(0, 48)}")`);
+const firstThumb = liveThumbs()[0];
+const firstImg = firstThumb.querySelector('img');
+const axis1 = axisOf();
+
+// the other two land, one of them a new best — so the axis steps up and every thumbnail slides left
+render(liveJob([liveItem(1, 0.40), liveItem(2, 0.75), pendingItem(3)],
+               { progress: { done: 2, total: 3 } }));
+const axis2 = axisOf();
+render(liveJob([liveItem(1, 0.40), liveItem(2, 0.75), liveItem(3, 0.62)],
+               { status: 'done', progress: { done: 3, total: 3 } }));
+const axis3 = axisOf();
+
+ok(liveThumbs().length === 3, `all three are plotted by the end (got ${liveThumbs().length})`);
+ok(liveThumbs()[0] === firstThumb, 'the first thumbnail is the same ELEMENT after two more polls');
+ok(liveThumbs()[0].querySelector('img') === firstImg, 'and its <img> is the same node');
+ok(srcSets.get(firstImg) === 1,
+   `the chart thumbnail's src was assigned exactly once across 3 renders (got ${srcSets.get(firstImg)})`);
+ok(axis1 <= axis2 && axis2 <= axis3,
+   `the axis only ever grows as results land (${axis1} -> ${axis2} -> ${axis3})`);
+ok(axis3 === 0.9, `and settles on the exact value for the best photo (got ${axis3})`);
+ok(/3 of 3 scored/.test(caption()), 'the caption reports the finished count');
+
+// a fresh run must start the chart over rather than inherit the previous run's nodes
+const lerr2 = render(job([pendingItem(9)], { id: 'live2', progress: { done: 0, total: 1 } }));
+ok(lerr2 === null, 'a second run renders without throwing');
+ok(liveThumbs().length === 0, `a new run starts with an empty chart (got ${liveThumbs().length})`);
+ok(/first result lands here/.test(caption()), 'and says what it is waiting for');
+
 // ---- 5. the About panel (async: the panel fetches its content) --------------------
 function finish() {
   console.log(`\nFAILURES: ${failures.length}`);

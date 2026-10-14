@@ -68,9 +68,13 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    answer, the run stops there instead of burning the queue on failing calls. One request per
    photo after that, cached, with live progress. A photo already scored shows instantly and costs
    nothing.
-4. **Read the field at a glance** — when the run finishes, a chart under the stats plots every photo's
-   composite on one axis, thumbnails stacked where they would overlap, each labelled with its rank and
-   score. Two smaller controls sit under it: **view** switches between the default *combined* axis and
+4. **Read the field at a glance** — a chart under the stats plots every photo's composite on one
+   axis, thumbnails stacked where they would overlap, each labelled with its rank and score. **It is
+   drawn as the run happens**, not only at the end: photos appear the moment they are scored, and the
+   caption carries the running count (“9 of 12 scored so far”), so the chart doubles as the progress
+   display. Nothing is re-created to do that — a photo that is already plotted *moves* when the axis
+   stretches, which is why the change is a slide rather than a flash. Two smaller controls sit under
+   it: **view** switches between the default *combined* axis and
    **by pose**, which gives each pose its own labelled stratum on the same scale — that is how you see
    the best and worst photo *within* a pose rather than only across the whole run (rank numbers stay
    global, so #3 means the same photo in both views). **thumbnail size** scales the chart for a

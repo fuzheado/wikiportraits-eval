@@ -110,7 +110,11 @@
          font-variant-numeric:tabular-nums}
   .ctick::after{content:"";position:absolute;left:50%;top:-6px;width:1px;height:6px;background:var(--line)}
   .cthumb{position:absolute;display:flex;flex-direction:column;align-items:center;gap:2px;
-          text-decoration:none;filter:drop-shadow(0 1px 2px rgba(9,17,30,.25))}
+          text-decoration:none;filter:drop-shadow(0 1px 2px rgba(9,17,30,.25));
+          /* the chart is drawn live as results land, so a thumbnail MOVES rather than being
+             re-created — this is what turns an axis rescale from a jump into a slide */
+          transition:left .45s ease,bottom .45s ease}
+  @media (prefers-reduced-motion:reduce){ .cthumb{transition:none} }
   .cthumb img{width:46px;height:auto;max-height:62px;object-fit:contain;border-radius:4px;
               border:1px solid var(--line);background:#eef2f7;display:block}
   .cthumb .crank{position:absolute;top:-9px;left:-6px;font-size:10px;font-weight:700;color:#fff;
@@ -480,31 +484,78 @@ function markRowOrder() {
 ["ranked", "input"].forEach(k => { const b = $("ord-" + k); if (b) b.onclick = () => setRowOrder(k); });
 markRowOrder();
 
+// Live-chart state. One node per photo, kept across polls so the chart PATCHES positions instead of
+// rebuilding: re-creating every <img> once a second would flash the whole chart, which is the same
+// trap the results list hit (HANDOFF §3 invariant 3).
+let chartNodes = new Map();
+let chartKey = "";
+
+function chartKeyOf(it) { return it.pageid != null ? "p" + it.pageid : (it.title || it.raw || ""); }
+
 function renderChart(job) {
   const el = $("chart");
   if (!el) return;
-  if (job.status !== "done" && job.status !== "error") { el.innerHTML = ""; return; }
-  const done = (job.items || []).filter(i => i.status === "done" && i.composite != null)
-    .sort((a, b) => a.composite - b.composite);
   const rowEl = $("chartsizerow");
-  if (!done.length) { el.innerHTML = ""; if (rowEl) rowEl.hidden = true; return; }
-  const max = done[done.length - 1].composite;
-  const top = Math.min(1, Math.ceil((max * 1.1 + 0.02) * 10) / 10);   // one-decimal ceiling w/ headroom
-  const Z = CHART_SIZES[chartSize] || CHART_SIZES.m;
-  const TW = Z.TW, GAP = 10, ROW = Z.ROW;            // thumb width, min gap, lane height (px)
-  const LANES_MAX = 5;
   const byPose = chartMode === "pose";
-  if (rowEl) rowEl.hidden = false;
   markChartSize();
   markChartMode();
 
-  el.innerHTML = `<b class="h">composite by photo</b> <span class="meter">axis 0 → ${fmt(top, 1)}
-    (best photo ${fmt(max)}) · our arithmetic, min(face, eyes) × pose weight — not a model probability
-    · ${byPose ? "one stratum per pose; rank badges stay global" : "thumbs stack when they would overlap"}</span>
-    <div class="cchart">${byPose ? `<div class="cposes"></div>` : ""}
-      <div class="chartbox"><div class="caxis"></div></div></div>`;
-  const box = el.querySelector(".chartbox");
+  // One full clear per RUN, never per poll. Everything below this line patches nodes in place.
+  const key = String(job.id || "");
+  if (key !== chartKey) { chartKey = key; chartNodes.clear(); el.innerHTML = ""; }
+
+  const running = job.status !== "done" && job.status !== "error";
+  const all = job.items || [];
+  const done = all.filter(i => i.status === "done" && i.composite != null)
+    .sort((a, b) => a.composite - b.composite);
+  const nDone = all.filter(i => i.status === "done").length;
+
+  // The shell is built once per run and then left alone (only the caption text is patched), so a poll
+  // can never destroy the thumbnails inside it.
+  let box = el.querySelector(".chartbox");
+  if (!box) {
+    el.innerHTML = `<b class="h">composite by photo</b> <span class="meter"></span>
+      <div class="cchart"><div class="cposes"></div><div class="chartbox"><div class="caxis"></div></div></div>`;
+    box = el.querySelector(".chartbox");
+  }
+  const meterEl = el.querySelector(".meter");
   const poseCol = el.querySelector(".cposes");
+  poseCol.style.display = byPose ? "" : "none";   // kept empty in combined mode, so no .plabel is written
+  if (rowEl) rowEl.hidden = false;
+
+  // Live: draw whatever has landed. Before the first result, SAY SO rather than leaving a hole — the
+  // chart doubles as the progress display now, so it should exist from the first poll.
+  if (!done.length) {
+    meterEl.textContent = running
+      ? (all.length ? `scoring — the first result lands here (${nDone} of ${all.length} in)`
+                    : "waiting for the run to start")
+      : "nothing was scored";
+    box.style.height = "40px";
+    box.querySelectorAll(".cthumb,.cgrid,.ctick").forEach(n => n.remove());
+    chartNodes.forEach(n => n.remove());
+    chartNodes.clear();
+    poseCol.innerHTML = "";
+    return;
+  }
+
+  const max = done[done.length - 1].composite;
+  const exact = Math.min(1, Math.ceil((max * 1.1 + 0.02) * 10) / 10);   // one-decimal ceiling w/ headroom
+  // The axis input is `max`, the best composite so far, and results only ever push it UP — so the axis
+  // is monotonic by construction and no thumbnail can move backwards. What it does do is step up in
+  // 0.1 jumps as a new best arrives, which slides every thumbnail left; the CSS transition on
+  // `.cthumb` is what turns that slide into a movement rather than a jump. (A high-water-mark guard
+  // was written here first and then removed: `max` is already monotonic, so it could never fire.)
+  const top = exact;
+  const Z = CHART_SIZES[chartSize] || CHART_SIZES.m;
+  const TW = Z.TW, GAP = 10, ROW = Z.ROW;            // thumb width, min gap, lane height (px)
+  const LANES_MAX = 5;
+
+  meterEl.innerHTML = `axis 0 → ${fmt(top, 1)} (best photo ${fmt(max)}) · `
+    + `<b>${nDone} of ${all.length} scored</b>${running ? " so far" : ""} · our arithmetic, `
+    + `min(face, eyes) × pose weight — not a model probability · `
+    + (byPose ? "one stratum per pose; rank badges stay global"
+              : "thumbs stack when they would overlap");
+
   const w = box.clientWidth || 800;
 
   // One group per pose (a single group in the combined view). Thumbs stack into lanes when a
@@ -534,7 +585,10 @@ function renderChart(job) {
 
   const rankOf = new Map(done.map((it, i) => [it, done.length - i]));
   const H = y;                       // total plot height, which is what converts between the two
-  let html = "";
+  poseCol.querySelectorAll(".plabel").forEach(n => n.remove());   // rebuilt below (strata view only)
+  // ---- the thumbnails: created ONCE per photo and then moved. Holding the same node across polls
+  // keeps the already-decoded image, so the CSS transition animates the move instead of re-loading.
+  const live = new Set();
   for (const g of groups) {
     // `g.top` is measured DOWN from the top (that is how the labels are positioned) while CSS
     // positions a thumbnail UP from the bottom. Convert once, here, and never mix the two: doing it
@@ -547,29 +601,65 @@ function renderChart(job) {
       const title = it.title || it.raw || "";
       const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
       const rank = rankOf.get(it);
-      html += `<a class="cthumb" data-title="${esc(title)}" style="left:${Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0)}px;
-          bottom:${(bandBottom + p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}"
-          target="_blank" rel="noopener" title="${rank}. ${esc(title)} — composite ${fmt(it.composite)}">
-        <span class="crank">${rank}</span>
-        <img src="${it.thumburl || ""}" alt="" loading="lazy" decoding="async"
-             style="width:${Z.IMW}px;max-height:${Z.IMH}px">
-        <span class="cscore">${fmt(it.composite)}</span></a>`;
+      const k = chartKeyOf(it);
+      live.add(k);
+      let a = chartNodes.get(k);
+      if (!a) {                     // first sighting of this photo: build the node, without a src
+        a = document.createElement("a");
+        a.className = "cthumb";
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.innerHTML = `<span class="crank"></span><img alt="" loading="lazy" decoding="async">`
+                    + `<span class="cscore"></span>`;
+        chartNodes.set(k, a);
+      }
+      a.href = commons || it.thumburl || "#";
+      a.dataset.title = title;
+      a.title = `${rank}. ${title} — composite ${fmt(it.composite)}`;
+      a.style.left = Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0) + "px";
+      a.style.bottom = (bandBottom + p.lane * ROW + 26).toFixed(0) + "px";
+      a.querySelector(".crank").textContent = rank;
+      a.querySelector(".cscore").textContent = fmt(it.composite);
+      const img = a.querySelector("img");
+      const url = it.thumburl || "";
+      if (img.getAttribute("src") !== url) img.setAttribute("src", url);   // once per URL, never re-set
+      img.style.width = Z.IMW + "px";
+      img.style.maxHeight = Z.IMH + "px";
+      if (a.parentNode !== box) box.appendChild(a);
     }
-    if (poseCol && g.key) {
+    if (byPose && g.key) {
       poseCol.insertAdjacentHTML("beforeend",
         `<span class="plabel" style="top:${(g.top + (g.items.length ? 2 : 8)).toFixed(0)}px">`
         + `<b>${POSE_SHORT[g.key] || "other"}</b>${g.items.length || "—"}</span>`);
     }
   }
-  box.insertAdjacentHTML("beforeend", html);
+  // anything no longer plotted goes away (a re-rank cannot drop a photo, but a new run can)
+  for (const [k, a] of Array.from(chartNodes)) {
+    if (!live.has(k)) { a.remove(); chartNodes.delete(k); }
+  }
 
+  // The chrome that legitimately changes with the axis. Cheap spans with no images, so they are
+  // rebuilt rather than patched — but removed and re-added NEXT TO the thumbnails, never by wiping
+  // the container (which is what would take the <img> elements with it).
+  box.querySelectorAll(".cgrid,.ctick").forEach(n => n.remove());
+  const grid = document.createDocumentFragment();
   // vertical gridlines only in the strata view, where they are what makes the layers comparable;
   // the bottom ticks appear in both
   for (let v = 0; v <= top + 1e-9; v += 0.1) {
     const left = ((Math.round(v * 10) / 10) / top * 100).toFixed(2);
-    if (byPose) box.insertAdjacentHTML("beforeend", `<span class="cgrid" style="left:${left}%"></span>`);
-    box.insertAdjacentHTML("beforeend", `<span class="ctick" style="left:${left}%">${v.toFixed(1)}</span>`);
+    if (byPose) {
+      const gl = document.createElement("span");
+      gl.className = "cgrid";
+      gl.style.left = left + "%";
+      grid.appendChild(gl);
+    }
+    const t = document.createElement("span");
+    t.className = "ctick";
+    t.style.left = left + "%";
+    t.textContent = v.toFixed(1);
+    grid.appendChild(t);
   }
+  box.appendChild(grid);
 }
 
 window.addEventListener("resize", () => { if (lastJob) renderChart(lastJob); });

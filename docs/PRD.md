@@ -89,6 +89,7 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F20 | Accept a **PetScan PSID** as the input source — one integration that inherits categories, depth, templates, search and SPARQL, with union/subset/difference | **not shipped** (see roadmap) |
 | F21 | Accept an uploaded **list file** (`.txt`/`.csv`) in the browser, for sets too long to travel in a URL | **not shipped** (see roadmap) |
 | F22 | **Share a run as one URL** that replicates it: the list, the run, and the chart view, replayed from cache so opening it cannot spend a call | shipped |
+| F23 | **Plot the chart live**, as results land, so it doubles as the progress display instead of appearing only when the run ends; the axis stretches and thumbnails move rather than the chart arriving all at once | shipped |
 
 ## 6. Non-functional requirements
 
