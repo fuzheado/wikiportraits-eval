@@ -245,6 +245,24 @@ fails the suite instead of shipping.
   derives each band from its label offsets and checks that every thumb's bottom edge falls inside
   its own pose's band (verified against a positive control: restoring the bug makes it name the
   mirrored bands). Anything that maps a data category onto a screen position needs that check.
+- **A slow call is not a new image dimension, and cropping to a "known" one buys nothing.**
+  Measured 2026-10-14 on a real 50-file AAAS set (34 distinct shapes — 26 of them appearing once):
+  **33 of the 34 first sightings of a shape took 0.26–0.35 s**, and the shape-repeated group and the
+  first-sighting group had the *same* median (0.31 s). The earlier "~6 s cold-start dimension load"
+  in the `INFLIGHT` comment was an unmeasured guess from the v0.5.0 concurrency work — it had no
+  support, and it is now removed rather than left to mislead.
+  What the spikes actually are: **rare, isolated, ~4.6–6.8 s, ~1–2 % of calls.** Across ~166 calls
+  the same file gave 6.757 s once and 0.53–0.74 s on ten other calls; another gave 4.60 s on an
+  *identical repeat* of a call that had just taken 0.52 s, followed by twelve calls at ~0.45 s;
+  a second 50-file run had **no** call above 0.75 s. So it is not the shape, not reproducible per
+  image, and not a multi-call state (in the run that had one, its neighbours were 0.327 s and
+  0.317 s). Mechanism **not established** — a second/cold backend replica or a gateway-side stall
+  are the obvious candidates, and neither is observable from here.
+  The only *measurable* cost driver is payload size: a 320 KB thumbnail averaged ~0.65 s against
+  ~0.45 s for 145–183 KB ones (same shapes, ten calls each). Note what this rules out: cropping a
+  photo to a familiar dimension does not make the service faster — and it would make the cache
+  **wrong**, because the key is `(wiki, pageid, sha1, schema, served_width)` with no crop field, so
+  a cropped and an uncropped run of one file would share a key while holding different inputs.
 - **`quality` is defined only by its five legend labels** (0 unusable … 4 excellent) and by the
   640 px image the model actually sees. Do not describe it as a sharpness or lighting measurement.
 - **A disabled button fires no click event, so a deep link must call the function, not the control.**

@@ -446,9 +446,14 @@ def run_job(job):
 
             Call starts are paced globally (SPACING apart, whichever worker they come from), so
             two in-flight calls still look like one polite client to the endpoint — budget and
-            the one-retry-then-stop 429 rule are unchanged. The win: a cold-start dimension load
-            (~6 s for a never-seen width×height on this platform) is paid by one call while the
-            other stream waits on an already-warm dimension instead of the whole queue doing so.
+            the one-retry-then-stop 429 rule are unchanged. The win: a slow call is paid by one stream
+            while the other keeps working, instead of the whole queue waiting on it.
+
+            NOTE — an earlier version of this comment claimed the slow calls were a "cold-start
+            dimension load (~6 s for a never-seen width×height)". Measured 2026-10-14 and **false**:
+            33 of 34 never-seen shapes in a 50-file run took ~0.3 s, and repeating one shape gave
+            0.52 s, then 4.60 s, then twelve ~0.45 s calls. See HANDOFF §4 before "optimising" the
+            image size or cropping to a known dimension — it buys nothing and changes the answers.
             """
             while not stop.is_set():
                 try:
