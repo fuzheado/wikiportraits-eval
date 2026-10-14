@@ -96,8 +96,12 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
   build step. Verified by running under Toolforge's build image and locally.
 - **Deployability:** works under the Toolforge Build Service (`Procfile`) *and* the traditional
   uWSGI backend (`wsgi.py` exposing `app`).
-- **Etiquette:** descriptive `User-Agent` (configurable), ≤1 in-flight scoring call per job, calls
-  spaced by `SPACING` (0.9 s), 429 respected via `retry-after`, never retried in a loop.
+- **Etiquette:** descriptive `User-Agent` (configurable), model-call **starts** paced `SPACING`
+  (0.9 s) apart **globally** — that is the rate control and it is independent of worker count — with
+  at most **2** in-flight scoring calls. Measured 2026-10-14: the endpoint serves two same-origin
+  calls at serial latency, and because the pacing gate makes the second worker inert at healthy
+  speeds, 2 self-gates rather than pacing harder (`HANDOFF.md` §7.1). 429 respected via `retry-after`,
+  never retried in a loop.
 - **Read-only:** no write operations against any Wikimedia API. The only state kept is a local
   result cache and in-memory job state.
 - **Transparency:** every displayed number must be traceable to a field in the API response, and
@@ -187,7 +191,7 @@ Downloads for later photos run in a background thread while the model answers fo
 | Decision | Alternative rejected | Why (with evidence) | Reopen if |
 |---|---|---|---|
 | All Wikimedia calls made **server-side** | Call LiftWing directly from the browser | Every call costs quota; a browser-embedded call cannot set a proper User-Agent, exposes the endpoint to abuse, and offers no cache | LiftWing adds CORS + per-user keys and a browser-native app is wanted |
-| One image per request, one call at a time | 3–5 concurrent workers | A 3-worker run burned the hourly budget in 4 calls then hit 429 for 162 s; concurrency just empties the window faster | Running from WMCS, where the budget is orders of magnitude larger |
+| One image per request, **2** concurrent calls (was 1) | 3–5 concurrent workers | Originally 1: a 3-worker run burned the anonymous hourly budget in 4 calls, then hit 429 for 162 s — on that tier concurrency only emptied the window faster. Reopened and **re-measured 2026-10-14** on the deployment (WMCS, no quota): 2 same-origin calls run at serial latency (**0.332 s vs 0.337 s median, n=12**) for **1.6× throughput**, while 4 streams cost **+61 %** per call for only 2.24×. The second worker is also *inert* below `SPACING` (`HANDOFF.md` §7.1), so it self-gates instead of adding pace | The endpoint is shown to queue same-origin calls, or more than 2 is shown to scale |
 | Request the **960 px** step of Commons' thumbnail ladder (was 640 px; changed 2026-10-14) | Send 1024 px or originals | The model server downscales to 640 px whatever we send, so a larger rendition is wasted bytes (~80 % more for the 1280 bucket). **640 is not a `$wgThumbnailSteps` step**, so a 640 request was silently served the 960 asset anyway, while `imageinfo.thumbwidth` reported 640 (T388792). Asking for the step makes the request honest and costs nothing extra | A future model serves larger inputs, or Commons changes the ladder (canary: `probe_thumb_ladder.py`) |
 | Keep the model's five labels as the definition of "quality" | Write our own rubric/prompt | A custom rubric would make the output unattributable and impossible to compare with other Clef users | A labelled calibration set justifies a domain-specific rubric |
 | Report the raw probability | Apply a 0.5 threshold as "ready / not ready" | In every sample nothing exceeded ~0.71 and the distribution is model-specific; a fixed cut-off would manufacture false confidence | A calibration study produces a defensible curve |
@@ -207,8 +211,9 @@ Downloads for later photos run in a background thread while the model answers fo
 |---|---|---|
 | Cost per photo | API calls per image | 1 (0 when cached) |
 | Throughput under quota | Photos/hour | ~90 uncached photos/hour on the anonymous tier (100 calls/h shared) |
-| Warm call latency | `wall_s` per call | median 0.54 s over 62 recorded calls (2026-10-02/12); 6.95 s worst |
-| Endpoint condition today | `wall_s`, `ttfb_s`, verdict | **28.6 s median (53× baseline), verdict `service-side`** on 2026-10-13 |
+| Warm call latency | `wall_s` per call | median 0.54 s over 62 recorded calls from the **dev host** (2026-10-02/12); 6.95 s worst. **0.327 s median measured inside the deployed pod** (n=6, 2026-10-14) — production is ~1.6× faster than the dev-host figure, so `BASELINE_WARM_S` reads pessimistic there |
+| Two-stream throughput | phase elapsed, serial vs 2 streams | **1.59×** at unchanged per-call latency (3.76 s → 2.36 s for 12 calls, in-pod 2026-10-14); 4 streams 2.24× but **+61 %** per call (`research/concurrency-2026-10-14.md`) |
+| Endpoint condition today | `wall_s`, `ttfb_s`, verdict | **0.33 s median, verdict `normal`**, measured in-pod 2026-10-14 (it was 28.6 s median / `service-side` on 2026-10-13) |
 | Ranking usefulness | Spearman vs a second image size | 0.972 (n=32) — the ranking is stable to input scaling |
 | Question wording sensitivity | same photo, 5 wordings of one question | one photo moved **0.190 → 0.960**; range among three candidates fell 0.486 → 0.021 on the most "sensible-sounding" rewrite (n=4, indicative) |
 | Candidate separation (the metric that matters for triage) | range + ordering among photos that pass a plausibility floor | 0.486 for today's wording on the pilot sample; 0.365 (composite), 0.169 (`choice`), 0.106 / 0.082 / 0.021 (rewrites) |

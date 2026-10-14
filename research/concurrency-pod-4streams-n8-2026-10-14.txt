@@ -1,0 +1,55 @@
+[run_in_pod] probe_concurrency.py --n 8 --streams 4 — inside deployment/wikiportraits-eval on new-host-7.home
+fetching thumbnails (1 batched Commons call)…
+  thumb File:Erica Lockheimer at SXSW 2025 03.jpg                  served_w=960 309,459 B
+  thumb File:Kay Greyson June 2025 SXSW 2.jpg                      served_w=960 102,189 B
+  thumb File:Hassan El Raddad at the 2025 Red Sea Film Festival    served_w=960 110,860 B
+  thumb File:Alexa Kinas 2 G LOYOLA CHICAGO VS ST BONAVENTURE (5   served_w=960 151,962 B
+  thumb File:Tamika Williams-Jeter HC Dayton (55138373222).jpg     served_w=960 266,614 B
+  thumb File:Leslie Cohen portrait at WikiPortraits Studio at Su   served_w=960 347,851 B
+  thumb File:Linette Kasper at RavenCon 04242026-2.jpg             served_w=960 194,996 B
+  thumb File:Predrag Zimonjić KK Partizan Euroleague 20260225 (1   served_w=960 286,181 B
+  thumb File:Daiane Sodre at 2026 Cannes Film Festival 01 (cropp   served_w=960 253,922 B
+  thumb File:Jay Buchanan Rival Sons Tons of Rock 2026 07.jpg      served_w=960 265,317 B
+  thumb File:Moses Mensah 33 DF Spokane Velocity 07182026 vs Ric   served_w=960 234,665 B
+  thumb File:Pierfrancesco Favino at 83rd Venice International F   served_w=960 126,364 B
+=== probe_concurrency: n=8/phase, streams=4 ===
+
+A. serial
+  serial A    n=7  ok  wall median  0.326s  ttfb median  0.326s  upstream median       -  phase elapsed   2.73s
+      1 failed: [(503, '{"httpCode":503,"httpReason":"upstream connect error or disc')]
+
+B. concurrent (4 streams)
+  concurrent  n=8  ok  wall median  0.525s  ttfb median  0.524s  upstream median       -  phase elapsed   1.15s
+
+C. serial again (drift check)
+  serial C    n=8  ok  wall median  0.331s  ttfb median  0.331s  upstream median       -  phase elapsed   2.58s
+
+=== per-call detail ===
+  A-0   wall  0.324s  ttfb  0.323s  upstream  Nonems  client_ip 172.16.21.201
+  A-1   wall  0.291s  ttfb  0.291s  upstream  Nonems  client_ip 172.16.21.201
+  A-2   wall  0.326s  ttfb  0.326s  upstream  Nonems  client_ip 172.16.21.201
+  A-3   wall  0.491s  ttfb  0.491s  upstream  Nonems  client_ip 172.16.21.201
+  A-4   wall  0.324s  ttfb  0.324s  upstream  Nonems  client_ip 172.16.21.201
+  A-5   wall  0.367s  ttfb  0.367s  upstream  Nonems  client_ip 172.16.21.201
+  A-6   wall  0.331s  ttfb  0.331s  upstream  Nonems  client_ip 172.16.21.201
+  A-7   FAILED HTTP 503 {"httpCode":503,"httpReason":"upstream connect error or disconnect/reset before headers. r
+  B-0   wall  0.555s  ttfb  0.555s  upstream  Nonems  client_ip 172.16.21.201
+  B-1   wall  0.274s  ttfb  0.274s  upstream  Nonems  client_ip 172.16.21.201
+  B-2   wall  0.833s  ttfb  0.833s  upstream  Nonems  client_ip 172.16.21.201
+  B-3   wall  0.271s  ttfb  0.271s  upstream  Nonems  client_ip 172.16.21.201
+  B-4   wall  0.613s  ttfb  0.613s  upstream  Nonems  client_ip 172.16.21.201
+  B-5   wall  0.340s  ttfb  0.340s  upstream  Nonems  client_ip 172.16.21.201
+  B-6   wall  0.594s  ttfb  0.594s  upstream  Nonems  client_ip 172.16.21.201
+  B-7   wall  0.495s  ttfb  0.494s  upstream  Nonems  client_ip 172.16.21.201
+  C-0   wall  0.340s  ttfb  0.340s  upstream  Nonems  client_ip 172.16.21.201
+  C-1   wall  0.263s  ttfb  0.262s  upstream  Nonems  client_ip 172.16.21.201
+  C-2   wall  0.320s  ttfb  0.320s  upstream  Nonems  client_ip 172.16.21.201
+  C-3   wall  0.269s  ttfb  0.269s  upstream  Nonems  client_ip 172.16.21.201
+  C-4   wall  0.334s  ttfb  0.333s  upstream  Nonems  client_ip 172.16.21.201
+  C-5   wall  0.329s  ttfb  0.329s  upstream  Nonems  client_ip 172.16.21.201
+  C-6   wall  0.332s  ttfb  0.332s  upstream  Nonems  client_ip 172.16.21.201
+  C-7   wall  0.385s  ttfb  0.385s  upstream  Nonems  client_ip 172.16.21.201
+
+origin as the CDN saw it: 172.16.21.201
+
+(no upstream timing to compare — was every call a 200?)

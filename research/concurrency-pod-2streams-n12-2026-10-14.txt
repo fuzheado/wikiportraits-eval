@@ -1,0 +1,67 @@
+[run_in_pod] probe_concurrency.py --n 12 --streams 2 — inside deployment/wikiportraits-eval on new-host-7.home
+fetching thumbnails (1 batched Commons call)…
+  thumb File:Erica Lockheimer at SXSW 2025 03.jpg                  served_w=960 309,459 B
+  thumb File:Kay Greyson June 2025 SXSW 2.jpg                      served_w=960 102,189 B
+  thumb File:Hassan El Raddad at the 2025 Red Sea Film Festival    served_w=960 110,860 B
+  thumb File:Alexa Kinas 2 G LOYOLA CHICAGO VS ST BONAVENTURE (5   served_w=960 151,962 B
+  thumb File:Tamika Williams-Jeter HC Dayton (55138373222).jpg     served_w=960 266,614 B
+  thumb File:Leslie Cohen portrait at WikiPortraits Studio at Su   served_w=960 347,851 B
+  thumb File:Linette Kasper at RavenCon 04242026-2.jpg             served_w=960 194,996 B
+  thumb File:Predrag Zimonjić KK Partizan Euroleague 20260225 (1   served_w=960 286,181 B
+  thumb File:Daiane Sodre at 2026 Cannes Film Festival 01 (cropp   served_w=960 253,922 B
+  thumb File:Jay Buchanan Rival Sons Tons of Rock 2026 07.jpg      served_w=960 265,317 B
+  thumb File:Moses Mensah 33 DF Spokane Velocity 07182026 vs Ric   served_w=960 234,665 B
+  thumb File:Pierfrancesco Favino at 83rd Venice International F   served_w=960 126,364 B
+=== probe_concurrency: n=12/phase, streams=2 ===
+
+A. serial
+  serial A    n=11 ok  wall median  0.337s  ttfb median  0.336s  upstream median       -  phase elapsed   4.02s
+      1 failed: [(503, '{"httpCode":503,"httpReason":"upstream connect error or disc')]
+
+B. concurrent (2 streams)
+  concurrent  n=12 ok  wall median  0.332s  ttfb median  0.332s  upstream median       -  phase elapsed   2.36s
+
+C. serial again (drift check)
+  serial C    n=12 ok  wall median  0.321s  ttfb median  0.320s  upstream median       -  phase elapsed   3.76s
+
+=== per-call detail ===
+  A-0   FAILED HTTP 503 {"httpCode":503,"httpReason":"upstream connect error or disconnect/reset before headers. r
+  A-1   wall  0.265s  ttfb  0.264s  upstream  Nonems  client_ip 172.16.21.201
+  A-2   wall  0.340s  ttfb  0.339s  upstream  Nonems  client_ip 172.16.21.201
+  A-3   wall  0.481s  ttfb  0.481s  upstream  Nonems  client_ip 172.16.21.201
+  A-4   wall  0.337s  ttfb  0.336s  upstream  Nonems  client_ip 172.16.21.201
+  A-5   wall  0.340s  ttfb  0.340s  upstream  Nonems  client_ip 172.16.21.201
+  A-6   wall  0.321s  ttfb  0.321s  upstream  Nonems  client_ip 172.16.21.201
+  A-7   wall  0.326s  ttfb  0.326s  upstream  Nonems  client_ip 172.16.21.201
+  A-8   wall  0.305s  ttfb  0.305s  upstream  Nonems  client_ip 172.16.21.201
+  A-9   wall  0.354s  ttfb  0.354s  upstream  Nonems  client_ip 172.16.21.201
+  A-10  wall  0.340s  ttfb  0.340s  upstream  Nonems  client_ip 172.16.21.201
+  A-11  wall  0.331s  ttfb  0.331s  upstream  Nonems  client_ip 172.16.21.201
+  B-0   wall  0.327s  ttfb  0.327s  upstream  Nonems  client_ip 172.16.21.201
+  B-1   wall  0.273s  ttfb  0.273s  upstream  Nonems  client_ip 172.16.21.201
+  B-2   wall  0.329s  ttfb  0.329s  upstream  Nonems  client_ip 172.16.21.201
+  B-3   wall  0.503s  ttfb  0.503s  upstream  Nonems  client_ip 172.16.21.201
+  B-4   wall  0.336s  ttfb  0.336s  upstream  Nonems  client_ip 172.16.21.201
+  B-5   wall  0.335s  ttfb  0.335s  upstream  Nonems  client_ip 172.16.21.201
+  B-6   wall  0.330s  ttfb  0.330s  upstream  Nonems  client_ip 172.16.21.201
+  B-7   wall  0.334s  ttfb  0.334s  upstream  Nonems  client_ip 172.16.21.201
+  B-8   wall  0.495s  ttfb  0.495s  upstream  Nonems  client_ip 172.16.21.201
+  B-9   wall  0.321s  ttfb  0.321s  upstream  Nonems  client_ip 172.16.21.201
+  B-10  wall  0.319s  ttfb  0.319s  upstream  Nonems  client_ip 172.16.21.201
+  B-11  wall  0.536s  ttfb  0.536s  upstream  Nonems  client_ip 172.16.21.201
+  C-0   wall  0.341s  ttfb  0.341s  upstream  Nonems  client_ip 172.16.21.201
+  C-1   wall  0.256s  ttfb  0.256s  upstream  Nonems  client_ip 172.16.21.201
+  C-2   wall  0.323s  ttfb  0.323s  upstream  Nonems  client_ip 172.16.21.201
+  C-3   wall  0.263s  ttfb  0.263s  upstream  Nonems  client_ip 172.16.21.201
+  C-4   wall  0.342s  ttfb  0.342s  upstream  Nonems  client_ip 172.16.21.201
+  C-5   wall  0.336s  ttfb  0.335s  upstream  Nonems  client_ip 172.16.21.201
+  C-6   wall  0.328s  ttfb  0.328s  upstream  Nonems  client_ip 172.16.21.201
+  C-7   wall  0.327s  ttfb  0.327s  upstream  Nonems  client_ip 172.16.21.201
+  C-8   wall  0.301s  ttfb  0.301s  upstream  Nonems  client_ip 172.16.21.201
+  C-9   wall  0.309s  ttfb  0.309s  upstream  Nonems  client_ip 172.16.21.201
+  C-10  wall  0.302s  ttfb  0.302s  upstream  Nonems  client_ip 172.16.21.201
+  C-11  wall  0.318s  ttfb  0.317s  upstream  Nonems  client_ip 172.16.21.201
+
+origin as the CDN saw it: 172.16.21.201
+
+(no upstream timing to compare — was every call a 200?)

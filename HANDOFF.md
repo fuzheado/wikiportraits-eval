@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.15.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.16.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -30,7 +30,8 @@ App version 0.15.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 
 | `cache/thumbs/` | the exact thumbnail bytes sent to the model, keyed `wiki-pageid-sha1.img` — what the reports embed. Safe to delete (reports then re-fetch from Commons). |
 | `research/` | the question-design experiment: `wording-experiment-2026-10-13.md` (write-up), `wording_experiment.jsonl` (every raw answer), `wording_comparison.png` (chart), `wording_experiment_output.txt` (console log) — plus `sample-report.pdf` / `sample-report.md` / `sample-report-page1.png`, a real report served by the running app over HTTP (one photo, so it can be inspected without running anything) |
 | `PRD.md`, `README.md` | product rationale; user-facing docs |
-| dev scripts | `run_all_tests.sh`, `live_pipeline_check.py`, `verify_reports_live.py`, `verify_live_two.py`, `diag_contract_job.py`, `test_pdf_images.py`, `probe_latency_now.py`, `probe_spread.py`, `probe_thumb_ladder.py`, `analyze_*.py`, `tune_infobox_question.py`, `summarize_wording_experiment.py`, `make_wording_chart.py`, `restart_app.py`, `start_tunnel.py`, `check_docs.py`, `check_compat.py`, `check_js.py`, `package.sh` |
+| dev scripts | `run_all_tests.sh`, `live_pipeline_check.py`, `verify_reports_live.py`, `verify_live_two.py`, `diag_contract_job.py`, `test_pdf_images.py`, `probe_latency_now.py`, `probe_spread.py`, `probe_thumb_ladder.py`, `probe_concurrency.py`, `probe_inflight_pacing.py`, `analyze_*.py`, `tune_infobox_question.py`, `summarize_wording_experiment.py`, `make_wording_chart.py`, `restart_app.py`, `start_tunnel.py`, `check_docs.py`, `check_compat.py`, `check_js.py`, `package.sh` |
+| | *Asking Wikimedia from the right origin* (2026-10-14): `wmcs_tunnel.py` forwards only `api.wikimedia.org` through the Toolforge bastion so a **local** probe egresses from WMCS (`run_via_toolforge.py` runs any probe through it; `python3 wmcs_tunnel.py --check` proves the egress moved, using the CDN's own `x-client-ip` response header). `run_in_pod.sh` runs a repo script **inside the deployed pod**, which is the true production origin. Measured, same images, same hour: home `173.79.30.139` → 0.467–0.610 s/call, via bastion `2a02:ec80:a000:1::1c5` → 0.537–0.599 s, **in the pod `172.16.21.201` → 0.327 s**. So the tunnel is a good way to change the client class — its latency overhead is **≤ ~0.1 s and inside the direct path's own run-to-run spread**, so use it freely — but for a *latency-faithful* number run the script in the pod. (An early run showed a ~0.3 s/call tunnel penalty; that was **our own harness bug**, not the network: `ControlMaster` makes the client `ssh -N` exit immediately, so every call re-spawned ssh inside the timed region. Keep that in mind before trusting an unexplained transport cost.) Write-up: `research/concurrency-2026-10-14.md`; the methods are packaged for other projects as the local skill `toolforge-remote-origins`. |
 
 Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 restart_app.py`
 (kills by scanning `/proc` — this host has no `lsof`).
@@ -51,6 +52,9 @@ python3 test_ui_contract.py [URL]        # live, but free when the files are alr
 WANT=4 python3 live_pipeline_check.py [URL]   # live and costs 1 call per fresh file (+1 pre-flight probe, cached 10 min)
 python3 verify_live_two.py [URL]         # live: 1 cached + 1 fresh photo end to end, all four reports (+1 probe)
 python3 probe_latency_now.py             # live and costs 4 calls (2 text-only, 2 image)
+python3 probe_concurrency.py             # live: serial vs N streams — per-call latency, throughput,
+                                         # drift check; run it IN THE POD (see §7.1) or via the tunnel
+python3 probe_inflight_pacing.py         # offline, zero API calls: proves when INFLIGHT>1 does anything
 python3 probe_thumb_ladder.py            # live once (~10 calls), free thereafter — raw responses
                                          # cached in cache/ladder/; the ladder canary (see §12)
 python3 analyze_question_spread.py       # offline: spread of every question in the cache (free)
@@ -235,6 +239,17 @@ fails the suite instead of shipping.
   displayed", and the real brake on overuse is the 429 stop plus a human clicking the button. That
   distinction is why a URL that starts a run by itself is a bad idea —
   `MEMO-url-parameters-2026-10-14.md`.
+- **A concurrency setting can be inert, and this one was.** `_next_slot()` paces model-call
+  *starts* `SPACING` apart **globally — across workers and across jobs** — so `INFLIGHT>1` can only
+  ever overlap a call that *outlasts* `SPACING`. At production speed (0.33 s/call vs `SPACING` 0.9 s)
+  `INFLIGHT=2` is provably identical to serial: measured on the real `core.run_job`, the wall time
+  matches to the second and the maximum number of calls ever in flight is 1 (`probe_inflight_pacing.py`,
+  the offline canary for this). **Do not measure concurrency with a standalone probe and conclude the
+  app behaves that way** — `probe_concurrency.py` measures the *endpoint's* capacity for overlapping
+  calls, `probe_inflight_pacing.py` measures *this pipeline's* scheduling, and they answer different
+  questions. Method and numbers: `research/concurrency-2026-10-14.md`. A related trap in the same
+  place: production measured **0.327 s**/call while `BASELINE_WARM_S` is **0.54 s**, so a perfectly
+  healthy production run is labelled against a value ~1.6× too pessimistic.
 - **A cached run measures nothing.** If every row says `from cache`, the elapsed time is the disk's,
   not the model's. Tick **run fresh** (`no_cache: true` on `/api/run` and `/api/eval`) — it bypasses the
   read side of the cache and re-scores every photo at one call each, with the hourly budget and
@@ -310,14 +325,21 @@ that is fast today is not evidence that this app got faster. **Read §13 before 
 number in this file as a property of the tool.**
 
 How the app handles it: every call records `wall_s` (total) and `ttfb_s` (time to first byte — the
-gateway holding the request) plus `x-envoy-upstream-service-time`, and `latency_summary()` labels the
-run `normal` / `elevated` / `service-side` against `BASELINE_WARM_S` (0.54 s, env-overridable). The
+gateway holding the request), and `latency_summary()` labels the
+run `normal` / `elevated` / `service-side` against `BASELINE_WARM_S` (0.54 s, env-overridable). It
+also *tries* to record `x-envoy-upstream-service-time` as `upstream_ms` — **but that header is not
+sent on this path**: 0/24 in the app's own cache and 0/~140 in the concurrency probes (2026-10-14),
+so the field is always `None`. Treat `wall_s`/`ttfb_s` as the only timing signals; do not build
+anything on `upstream_ms` until a call is seen to populate it. The
 verdict shows in the UI, the run log and the reports.
 
 **A 5xx is retried once; a 4xx never.** The gateway's `503 upstream connect error or disconnect/
 reset before headers … connection timeout` means the model was never reached, so the photo was not
 processed and one retry (2 s backoff, logged, one attempt only) recovers most of them — the app
-otherwise loses the photo outright, which is what a real 503 did on 2026-10-14. `429` keeps its own
+otherwise loses the photo outright, which is what a real 503 did on 2026-10-14. **Measured
+2026-10-14: ~3.5 % of first attempts (4 of ~116) came back 503**, every one of them in a serial
+phase — small n, but enough to treat the retry as load-bearing rather than a rare edge, and worth
+handing to T440223. `429` keeps its own
 single retry driven by the server's `Retry-After`, and a `4xx` (malformed body, bad User-Agent) is a
 client-side fault that retrying cannot fix. `UPSTREAM_RETRY_CODES` / `UPSTREAM_RETRY_BACKOFF` in
 `wiclient.py`; `test_pipeline.py` asserts one retry, no loop, and no retry on a 400.
@@ -405,12 +427,18 @@ and a public tool should not be the thing that load-tests it.
 ## 7. Next steps, ranked (with the trap that makes each worth doing)
 
 **Small, high value**
-1. **Settle the concurrency question, then maybe re-enable 2 streams** — the owner suspects the
-   endpoint punishes two concurrent calls, so `INFLIGHT` defaults to 1 (serial). The overlap
-   machinery is built and unit-verified (2 streams, 35.5 s vs 61.4 s serial when the endpoint was
-   at ~30 s/call). One production run of 2 fresh photos with `INFLIGHT=2` — comparing per-call
-   `wall_s` against serial — settles whether the endpoint queues same-origin calls. Keep serial
-   unless the measurement is clearly neutral or better.
+1. **Settled 2026-10-14 — and it is now a decision, not a measurement.** The question was whether the
+   endpoint punishes two same-origin calls. It does not: in the pod at n=12, per-call median was
+   **0.332 s concurrent vs 0.337 s serial** (ratio 0.985) while the phase ran **1.6× faster**; four
+   streams cost **+61 %** per call for only 2.24×, so two is the cap. But the finding that matters is
+   *why the old default was inert*: `_next_slot()` paces call starts `SPACING` apart globally, so a
+   second worker can only overlap a call that outlasts `SPACING` (0.9 s). At 0.33 s/call `INFLIGHT=2`
+   provably changes nothing; at 3 s/call the same setting is worth 1.82×. **`INFLIGHT` therefore now
+   defaults to 2** — it is self-gating, and it *is* the adaptive behaviour anyone would otherwise
+   write a monitor thread for (the trigger is `SPACING`, not an arbitrary 2 s). What remains is not
+   technical: §13's courtesy rule still argues against doubling *draw* during an incident, since at
+   28 s/call two streams is ~257 calls/h. `INFLIGHT=1` reverts it; hand the numbers to T440223 either
+   way. Write-up: `research/concurrency-2026-10-14.md`.
 2. **Periodic latency probe + trend** — the endpoint moved 50× in a day with no announcement; a cron
    that runs `probe_latency_now.py` hourly and records the median makes the app's verdict meaningful
    and gives a real regression record (see the observability reference in §9). Keep the **date** on
@@ -512,6 +540,12 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
     663, 666, 667 as of `ad48944`) — about sixty lines below the warning that forbids it.
   - **Not upstream at all** (absent on 2026-10-14): `--buildservice-image` wanting `namespace/name`,
     and `start` being a no-op while a webservice already runs. Both are only in §6 here.
+- **Measuring from the right origin — now a shareable skill.** The bastion-tunnel and in-pod methods
+  (`wmcs_tunnel.py`, `run_via_toolforge.py`, `run_in_pod.sh`), the `x-client-ip` verification trick,
+  the buildpack-Python discovery inside the pod, and the lesson that *the tunnel fixes the client
+  class but not the latency* are packaged for other projects as the local skill
+  **`toolforge-remote-origins`** (`~/.pi/agent/skills/toolforge-remote-origins/`, with working copies
+  under `scripts/`). The files in this repo are the originals — if you change one here, port it there.
 - **Wikitech:** `Machine_Learning/LiftWing/Large_Language_Models` — the model list (clef-flash is
   under "Task Specific models"), caps, the rate-limit tiers, the one published benchmark, and the
   "experimental, no SLA" caveat. **It changed on 2026-10-13 05:12 UTC**, hours before the slowdown
@@ -818,10 +852,13 @@ exists.
 
 1. Re-measure before concluding: `python3 probe_latency_now.py` (4 calls). **If text-only is also
    slow, the app is innocent** — record the dated number and move on.
-2. Do **not** compensate by adding retries, raising `INFLIGHT`, or shortening `SPACING`. On the dev
-   host that burns a genuinely shared 100 req/h budget (§3.7); on Toolforge the quota is lifted (§13),
-   so the reason is courtesy rather than a cap — and neither is a reason to push harder on a service
-   that is already struggling.
+2. Do **not** *react* by adding retries, raising `INFLIGHT` past its default, or shortening
+   `SPACING`. On the dev host that burns a genuinely shared 100 req/h budget (§3.7); on Toolforge the
+   quota is lifted (§13), so the reason is courtesy rather than a cap — and neither is a reason to push
+   harder on a service that is already struggling. `INFLIGHT` itself now defaults to **2** on the
+   evidence in §7.1, and that is deliberately *not* a reaction: the pacing gate makes it inert at
+   healthy speeds and it only overlaps calls once the endpoint passes `SPACING`. Raising it *further*
+   during a bad hour is still exactly what this rule forbids.
 3. Hand the measurement to the ML team on **T440223** (dated, with text-only vs image split, and the
    HTTP status). **Hand it over, do not post it** — this agent's default for Phabricator is
    read-only, and a Wikimedia account holder should file or comment in their own name.

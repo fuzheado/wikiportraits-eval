@@ -269,7 +269,7 @@ PORT=8080 python3 app.py       # honour a supplied port (Toolforge does this)
 Optional settings: `THUMB_WIDTH` (960 — must be a step of Commons' `$wgThumbnailSteps` ladder, since
 Commons quantises the request upward; 640 is not a step, so a 640 request downloads the 960 asset and
 reports 960 as its width), `SPACING` (0.9 s between call *starts*, global across
-`INFLIGHT` streams), `INFLIGHT` (1 = serial, the default; set 2 for two concurrent calls within a run — call starts stay SPACING apart globally), `HOURLY_BUDGET` (100 — the app's *own* courtesy cap, not the platform's: see **Be a good citizen**),
+`INFLIGHT` streams), `INFLIGHT` (**2** — at most two concurrent model calls within a run; call *starts* stay `SPACING` apart globally, so the second worker only overlaps a call that outlasts `SPACING`. It is therefore inert at healthy speeds and worth ~1.8× once the endpoint degrades. `INFLIGHT=1` restores strict serial; 4 streams is measurably worse — `HANDOFF.md` §7.1), `HOURLY_BUDGET` (100 — the app's *own* courtesy cap, not the platform's: see **Be a good citizen**),
 `MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run), `PARSE_MAX` (1000 per parse),
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
@@ -349,12 +349,28 @@ python3 test_default_list.py --live      # live: 1 batched Commons call, 0 model
 python3 test_privacy.py      # the request log: no query, no IP, no UA (offline)
 python3 check_js.py          # the inline script still parses (offline)
 python3 check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
+python3 probe_inflight_pacing.py         # offline, 0 API calls: proves when INFLIGHT>1 does anything
 .venv-pdf/bin/python test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
 node test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
 python3 test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content
 WANT=4 python3 live_pipeline_check.py [URL]   # live: pipeline, states, latency on fresh files
 python3 verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports inspected
+python3 probe_concurrency.py --n 12 --streams 2              # live: the endpoint's capacity for 2
+                                                             # streams (per-call latency, throughput)
+./run_in_pod.sh probe_concurrency.py --n 12 --streams 2      # …the same, from the production origin
 ```
+
+**Measure LiftWing from the right origin.** The endpoint classifies by **source network**: a home
+connection is the shared 100 req/hour anonymous tier, while Toolforge/WMCS is the effectively
+unlimited *known network* tier the deployment runs in — so a laptop measurement is a different
+regime. `python3 wmcs_tunnel.py --check` proves the change (the CDN's own `x-client-ip` response
+header moves), and `run_via_toolforge.py` routes any probe through the bastion; alternatively
+`./run_in_pod.sh <script> [args]` runs one **inside the deployed pod**, which is the true production
+origin. Note what the tunnel does and does not buy you: it changes *which client class you are*
+(that is the point), and its latency overhead measured **≤ ~0.1 s** — inside the direct path's own
+run-to-run spread — so use it freely. For a latency-faithful number, run the script in the pod
+instead (0.327 s there vs 0.47–0.61 s from home). Numbers and method:
+`research/concurrency-2026-10-14.md`.
 
 **Two checks run automatically.** With `git config core.hooksPath .githooks` (once per clone), a
 pre-commit hook runs the offline suites on every commit — and verifies the starter list against
@@ -382,7 +398,9 @@ hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
   roadmap §13, decisions §9), the next thing to do in `HANDOFF.md` §7.
 - **`research/`** — the question-design pilot (2026-10-13): write-up, raw answers, chart, plus a dated
   copy of the Wikitech rate-limit and benchmark sections. Read this before changing any question
-  wording.
+  wording. It also holds the concurrency study (`concurrency-2026-10-14.md` and its raw logs), which
+  is what set `INFLIGHT`, and which records both the origin measurements and a harness bug that
+  faked a tunnel latency penalty until it was caught.
 
 Model: `clef-flash` 9.41 B (Apache-2.0, Cloudflare), served by the Wikimedia Foundation on
 [LiftWing](https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models) —

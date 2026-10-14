@@ -1,0 +1,14 @@
+real core.run_job, stubbed model, N=6 photos, zero API calls
+
+ per-call  SPACING  INFLIGHT     wall  max overlap  calls
+------------------------------------------------------------
+    0.33s    0.90s         1    4.86s            1      6
+    0.33s    0.90s         2    4.87s            1      6
+    3.00s    0.90s         1   18.05s            1      6
+    3.00s    0.90s         2    9.94s            2      6
+
+--- verdict ---
+  per-call 0.33s: INFLIGHT 1→2 gives 1.00x, max overlap 1 → 1
+      per-call < SPACING — the pacing gate binds, so the extra worker never overlaps
+  per-call 3.00s: INFLIGHT 1→2 gives 1.82x, max overlap 1 → 2
+      per-call > SPACING — the pacing gate is slack, so the extra worker fills the gap

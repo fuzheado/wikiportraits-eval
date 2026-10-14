@@ -18,7 +18,15 @@ STATIC = os.path.join(HERE, "static")
 DEFAULT_LIST = os.path.join(HERE, "default_list.txt")
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(HERE, "cache"))
 MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
-INFLIGHT = max(1, int(os.environ.get("INFLIGHT", "1")))   # concurrent model calls (1 = serial)
+# Concurrent model-call workers. **Measured 2026-10-14, so the comment is long on purpose:**
+# `_next_slot()` paces call *starts* SPACING apart globally, so a second worker can only ever
+# overlap a call that *outlasts* SPACING. At production speed (0.33 s/call vs SPACING 0.9 s)
+# INFLIGHT=2 is therefore **inert** — proven with this pipeline to the second, max overlap 1
+# (`probe_inflight_pacing.py`); once the endpoint degrades past 0.9 s/call the same setting fills
+# the gap for ~1.8x. It is self-gating, which is why the default is 2 rather than 1.
+# **Do not raise it further:** 4 streams cost +61% per-call latency for only 2.24x
+# (`research/concurrency-2026-10-14.md`). `INFLIGHT=1` restores the old serial behaviour.
+INFLIGHT = max(1, int(os.environ.get("INFLIGHT", "2")))
 MAX_INPUT_ITEMS = int(os.environ.get("MAX_INPUT_ITEMS", "200"))  # cap per run (DoS guard)
 EVAL_MAX = int(os.environ.get("EVAL_MAX", "25"))       # per-call cap for POST /api/eval
 PROBE_TTL = float(os.environ.get("PROBE_TTL", "600"))  # reuse a pre-flight answer for 10 min
@@ -848,10 +856,12 @@ def about_payload() -> dict:
                   f"this app calls the KServe <code>:predict</code> endpoint and not an "
                   f"OpenAI-compatible one · schema hash "
                   f"<code>{esc(SCHEMA_HASH)}</code> · thumbnail step {THUMB_WIDTH}&nbsp;px · "
-                  f"call spacing {SPACING}&nbsp;s.</li>"
+                  f"call spacing {SPACING}&nbsp;s (the rate control, independent of workers), "
+                  f"up to {INFLIGHT} concurrent model call(s).</li>"
                   f"<li>Latency baseline {BASELINE_WARM_S}&nbsp;s per call, measured on this "
                   f"install (62 recorded calls, 2026-10-02 and 2026-10-12) — not a documented "
-                  f"figure.</li>"
+                  f"figure. Measured 0.327&nbsp;s inside the deployed pod (2026-10-14), so it "
+                  f"reads ~1.6&times; pessimistic there.</li>"
                   f"<li>Semantics quoted from the model card: <a href=\"{MODEL_CARD}\">"
                   f"huggingface.co/Cloudflare/clef-flash</a>; the model list and platform caveats "
                   f"from <a href=\"{WIKITECH_PAGE}\">Wikitech: LiftWing Large Language Models</a>."
@@ -885,7 +895,8 @@ def about_payload() -> dict:
                         "thumb_width_is_ladder_step": THUMB_WIDTH in wiclient.THUMB_LADDER,
                         "thumb_ladder": list(wiclient.THUMB_LADDER),
                         "model_max_width": wiclient.MODEL_MAX_WIDTH,
-                        "spacing_s": SPACING, "schema_hash": SCHEMA_HASH},
+                        "spacing_s": SPACING, "inflight": INFLIGHT,
+                        "schema_hash": SCHEMA_HASH},
             "sources": [MODEL_CARD, WIKITECH_PAGE]}
 
 
@@ -946,6 +957,7 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
             if path == "/api/config":
                 return js({"model": "llm-clef-flash", "endpoint": wiclient.LIFTWING,
                            "thumb_width_requested": THUMB_WIDTH, "spacing_s": SPACING,
+                           "inflight": INFLIGHT,
                            "eval_max": EVAL_MAX,
                            "thumbnail": {"requested_w": THUMB_WIDTH,
                                          "is_ladder_step": THUMB_WIDTH in wiclient.THUMB_LADDER,
