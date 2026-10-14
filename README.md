@@ -1,6 +1,6 @@
 # WikiPortraits Eval
 
-**Paste a list of Commons photos → get a ranked table of which ones work as a Wikipedia portrait,
+**Paste a list of Wikimedia Commons photos → get a ranked table of which ones work as a Wikipedia portrait,
 with the reasons, and a report you can download as a PDF or as data (JSON/CSV).**
 
 WikiPortraits events produce thousands of photographs, and the hard part is not taking or uploading
