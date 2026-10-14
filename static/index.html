@@ -85,7 +85,15 @@
   .warn{color:var(--amber);font-size:13px}
   .ok{color:var(--green);font-weight:600}
   .clock{font-variant-numeric:tabular-nums}
-  .chartbox{position:relative;margin-top:10px;border-bottom:1px solid var(--line)}
+  /* `.chartbox` must carry an explicit flex basis. It is a flex item whose children are ALL absolutely
+     positioned (thumbs, ticks, gridlines, the axis line), so its automatic width is its content width
+     — which is zero. A zero-width box makes every `left: N%` tick resolve to the same pixel (all 11
+     labels pile up at the left edge), hides the `border-bottom` axis line, and drops `clientWidth` to
+     0 so the chart falls back to its hardcoded 800px and no longer fills the card. Broke when
+     `.cchart{display:flex}` arrived with the by-pose view (v0.10.0, ac4b516); jsdom cannot catch it,
+     because jsdom has no layout. `check_js.py` now asserts this rule keeps a basis. */
+  .chartbox{position:relative;margin-top:10px;border-bottom:1px solid var(--line);
+            flex:1 1 auto;min-width:0}
   /* section 2 was overwhelming: headings that read as headings rather than as 22px display text */
   .h{font-size:13.5px;font-weight:650;color:var(--ink)}
   /* run stats as one-line strips instead of a grid of big boxes */

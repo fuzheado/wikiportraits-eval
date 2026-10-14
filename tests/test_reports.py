@@ -206,7 +206,9 @@ ok(pdf_text(reports.build_pdf(spread_items, meta)) == full_chart,
    "chart_axis defaults to the whole field (no parameter, same report)")
 
 def pdf_labels(blob: bytes):
-    """(x, y, text) for every free-positioned string — enough to check chart placement.
+    # raw docstring on purpose: it names a regex literal, and a non-raw one raised
+    # `SyntaxWarning: invalid escape sequence '\d'` — harmless today, an error in a future Python
+    r"""(x, y, text) for every free-positioned string — enough to check chart placement.
 
     `text_at` writes `x y Td (text) Tj`, so the position comes out with the string. The coordinates
     must be allowed to be NEGATIVE: a chart tall enough to run past the page emits negative `y`, and
