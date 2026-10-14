@@ -411,6 +411,22 @@ and a public tool should not be the thing that load-tests it.
   (`https://wikiportraits-eval.toolforge.org`), Build Service backend, source
   `https://github.com/Fuzheado/wikiportraits-eval` (public, MIT). Logs via
   `kubectl logs deployment/wikiportraits-eval` from the tool account.
+- **Deployed again 2026-10-14**, twice for real code (v0.16.0 `INFLIGHT=2`, v0.17.0 the retry policy)
+  and once for the *image*: `sha256:85da591f0414…`, the node-free build from moving `package.json`
+  into `tests/`. That last one is worth noting for a versioning reason — **`APP_VERSION` stayed
+  0.17.0, deliberately**, because the code is byte-identical and the version describes the code. The
+  rule above ("bump it for every deploy") is really *bump it whenever the code changes*; if you
+  deploy a new **image** from the same code, record the **digest** instead, and prove it with the
+  layer stack rather than `/api/about`:
+
+  ```bash
+  kubectl exec deployment/wikiportraits-eval -- sh -c 'ls /layers; du -sh /layers'
+  # 42M total, and NO heroku_nodejs — that is the node-free image answering
+  ```
+
+  Registry quota went **253.90 MiB → 181.01 MiB** (25 % → 18 % of the 1 GiB limit) on that deploy.
+  End-to-end verified afterwards: `tools/live_pipeline_check.py` PASS (4 fresh photos, cache wiped
+  by the `--mount=none` restart as always).
 - **Verified deploy procedure (2026-10-14, v0.6.1 — this exact sequence works):**
 
   ```bash
