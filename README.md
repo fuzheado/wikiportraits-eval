@@ -267,6 +267,7 @@ python3 test_thumb_width.py  # served width, ladder steps, cache keying (offline
 python3 test_default_list.py # the starter list + the "run fresh" flag (offline)
 python3 test_default_list.py --live      # live: 1 batched Commons call, 0 model calls
 python3 check_js.py          # the inline script still parses (offline)
+python3 check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
 .venv-pdf/bin/python test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
 node test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
 python3 test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content

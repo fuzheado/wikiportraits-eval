@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import time
+from typing import Optional
 
 import wiclient
 
@@ -60,7 +61,7 @@ VARIANTS = {
 }
 
 
-def value_of(ans: dict) -> float | None:
+def value_of(ans: dict) -> Optional[float]:
     """Normalise an answer to a 0-1 number (score divided by its top index)."""
     if not ans:
         return None

@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.6.0 · stdlib Python only · last full test pass 2026-10-14
+App version 0.6.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -33,8 +33,9 @@ Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 resta
 
 ```bash
 bash run_all_tests.sh                    # everything below, in order
-python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py test_thumb_width.py test_default_list.py   # offline
+python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py test_thumb_width.py test_default_list.py check_compat.py   # offline
 python3 check_js.py                      # offline: the page script parses (node --check)
+python3 check_compat.py                  # offline: nothing newer than the advertised 3.9 floor
 python3 check_docs.py check_memo_refs.py # offline: docs exist & cite real files (free)
 node test_render_dom.js                  # offline (needs `npm install` once — jsdom, ~25 MB)
 .venv-pdf/bin/python test_pdf_images.py             # renders a PDF back to PNG for eyeballing
@@ -205,6 +206,19 @@ fails the suite instead of shipping.
   `SPACING` still enforced. Bypassed answers are written back, so the calls are not wasted.
 - **`quality` is defined only by its five legend labels** (0 unusable … 4 excellent) and by the
   640 px image the model actually sees. Do not describe it as a sharpness or lighting measurement.
+- **The advertised Python floor was a lie until 2026-10-14.** README said "Python 3.9+" while
+  `pdfmin.py` used `-> str | None` (PEP 604). That is evaluated when the *class is defined*, so on 3.9
+  importing `pdfmin` raised `TypeError: unsupported operand type(s) for |` and took out every test
+  that touched it. CI on 3.9 caught it the first time it ran; `check_compat.py` is the local lint that
+  now catches it in milliseconds (annotation unions, `match`, `except*`). **Note what the lint does
+  not flag**: `a | b` as an expression, because dict/set union is 3.9-safe — an earlier hand-rolled
+  grep for PEP 604 found *none* of the three real sites while a naive AST scan over-reported six
+  false positives, so trust `check_compat.py`, which discriminates on annotation context.
+- **`check_docs.py` used to hardcode the owner's home directory** for the one upstream path it
+  verifies (`scripts/parse-file-refs.py`, which lives in the Wikipedia-AI-Skills repo). It therefore
+  passed on this machine and failed in CI — a repo check must not depend on whose laptop it runs on.
+  It now takes `SKILLS_DIR` and reports that reference as *not verified here* when the clone is
+  absent, instead of failing.
 
 ## 5. The endpoint can be ~50× slower than its baseline — and that is not your bug
 

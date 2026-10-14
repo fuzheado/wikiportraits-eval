@@ -7,11 +7,18 @@ from typing import Optional
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DOCS = ["PRD.md", "README.md", "HANDOFF.md"]
-# texts that name a *shape* rather than a file, and upstream paths verified elsewhere
+# texts that name a *shape* rather than a file
 NON_FILES = {"wiki-pageid-sha1-schemahash-width.json"}
-UPSTREAM = {"scripts/parse-file-refs.py": "/Users/alih/.pi/repos/Wikipedia-AI-Skills/.claude/skills/commons-file-resolution/"
-                                        "scripts/parse-file-refs.py"}
+# Paths the docs cite that live in a DIFFERENT repository. They can only be checked where that repo
+# happens to be checked out, so they are optional: point SKILLS_DIR at a local Wikipedia-AI-Skills
+# clone to verify them. Hard-coding the owner's home directory here once made this check pass on one
+# machine only and fail in CI (found 2026-10-14) — a repo check must not depend on whose laptop it
+# runs on.
+SKILLS_DIR = os.environ.get("SKILLS_DIR", "")
+UPSTREAM = {"scripts/parse-file-refs.py": os.path.join(SKILLS_DIR, "commons-file-resolution/scripts/parse-file-refs.py")
+            if SKILLS_DIR else ""}
 missing = []
+unverified = []
 for d in DOCS:
     p = os.path.join(ROOT, d)
     if not os.path.exists(p):
@@ -22,7 +29,7 @@ for d in DOCS:
 def resolves(tok: str) -> Optional[str]:
     """Return the path a doc reference resolves to, or None."""
     if tok in UPSTREAM:
-        return UPSTREAM[tok] if os.path.exists(UPSTREAM[tok]) else None
+        return UPSTREAM[tok] if UPSTREAM[tok] and os.path.exists(UPSTREAM[tok]) else None
     cand = os.path.join(ROOT, tok)
     if os.path.exists(cand):
         return cand
@@ -41,15 +48,22 @@ for d in DOCS:
         if tok in seen or tok in NON_FILES or tok.startswith(("references/", "tests/")):
             continue
         seen.add(tok)
-        p = resolves(tok)
-        if p is None:
+        if tok in UPSTREAM:
+            # an upstream file: verifiable only if SKILLS_DIR is set; never a failure here
+            if UPSTREAM[tok] and os.path.exists(UPSTREAM[tok]):
+                print(f"  ok  {tok}  (upstream, via SKILLS_DIR)")
+            else:
+                unverified.append(tok)
+            continue
+        if resolves(tok) is None:
             missing.append(f"{d} -> {tok}")
-        elif tok in UPSTREAM:
-            print(f"  ok  {tok}  (upstream)")
 print(f"\nfilenames referenced: {len(seen)}")
 for tok in sorted(seen):
     if tok in UPSTREAM:
         continue
     print(f"  {'ok ' if resolves(tok) else 'MISSING'} {tok}")
+if unverified:
+    print(f"\nnot verified here ({len(unverified)}) — upstream, set SKILLS_DIR to a local clone "
+          f"to check: {sorted(unverified)}")
 print("\nMISSING:", missing if missing else "none")
 sys.exit(1 if missing else 0)

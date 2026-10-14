@@ -21,6 +21,7 @@ run "test_default_list.py" python3 test_default_list.py
 run "check_pdf.py"         python3 check_pdf.py
 run "check_js.py"          python3 check_js.py
 run "check_docs.py"        python3 check_docs.py
+run "check_compat.py"      python3 check_compat.py
 run "check_memo_refs.py"   python3 check_memo_refs.py
 run "test_render_dom.js"   node test_render_dom.js
 run "test_ui_contract.py"  python3 test_ui_contract.py "$PUB"

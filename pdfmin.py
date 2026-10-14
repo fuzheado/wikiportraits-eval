@@ -12,6 +12,7 @@ skipped and reported as text rather than silently dropped.
 import struct
 import zlib
 from datetime import datetime, timezone
+from typing import Optional
 
 A4_W, A4_H = 595.28, 841.89
 MARGIN = 40.0
@@ -261,7 +262,7 @@ class PDF:
         self.rule(color=color)
 
     # -------------------------------------------------------------- pictures
-    def add_image(self, data: bytes, label: str = "") -> str | None:
+    def add_image(self, data: bytes, label: str = "") -> Optional[str]:
         """Register image bytes; returns a name usable with .image()/.card(), or None."""
         if not data:
             self.skipped.append((label, "no bytes"))
@@ -314,7 +315,7 @@ class PDF:
             self.buf.append(f"0.80 0.83 0.87 RG 0.5 w {x:.2f} {y:.2f} {w:.2f} {h:.2f} re S")
         return w, h
 
-    def card(self, lines: list, name: str | None = None, img_w: float = 118, pad: float = 10,
+    def card(self, lines: list, name: Optional[str] = None, img_w: float = 118, pad: float = 10,
              size: float = 8.2):
         """A photo card: image on the left (if any), wrapped lines to its right.
 
