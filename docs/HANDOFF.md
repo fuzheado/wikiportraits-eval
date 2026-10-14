@@ -1,7 +1,7 @@
 # HANDOFF — WikiPortraits Eval
 
 For the next developer or agent working on this. Everything here is either measured in this repo or
-attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
+attributable to the sources named at the end. Read **docs/PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
 App version 0.17.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
@@ -29,7 +29,7 @@ App version 0.17.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 
 | `cache/` | scored results, keyed `wiki-pageid-sha1-schemahash-width.json`. Safe to delete. |
 | `cache/thumbs/` | the exact thumbnail bytes sent to the model, keyed `wiki-pageid-sha1.img` — what the reports embed. Safe to delete (reports then re-fetch from Commons). |
 | `research/` | the question-design experiment: `wording-experiment-2026-10-13.md` (write-up), `wording_experiment.jsonl` (every raw answer), `wording_comparison.png` (chart), `wording_experiment_output.txt` (console log) — plus `sample-report.pdf` / `sample-report.md` / `sample-report-page1.png`, a real report served by the running app over HTTP (one photo, so it can be inspected without running anything) |
-| `PRD.md`, `README.md` | product rationale; user-facing docs |
+| `docs/` | the long-form docs: `HANDOFF.md` (this file — invariants, traps, measured numbers, next steps), `PRD.md` (why the product is shaped this way, and what would reopen each decision), `DEVELOPER-NOTE-v0.4.1.md`, and the `MEMO-*.md` investigations. `README.md` deliberately stays at the repo root, because GitHub renders the root one as the project page. |
 | `tests/` | the suites and lints **CI and the pre-commit hook run**: `test_*.py` (parsing, commas, pipeline, reports, served width, starter list, privacy, WSGI, the live UI contract), `check_*.py` (inline JS parses, the advertised 3.9 floor, docs exist, memo refs resolve, the PDF), plus `run_all_tests.sh` and `test_render_dom.js`. Invoked from the repo root (`python3 tests/test_x.py`); each also anchors its own `sys.path` at the root, so a single suite runs from any directory. Which ones cost API calls: §2. |
 | `tools/` | everything you run **by hand**, and nothing CI runs: live probes (`probe_*.py`), end-to-end verifications (`verify_*.py`), offline analyses (`analyze_*.py`), the wording experiment (`tune_infobox_question.py`, `summarize_wording_experiment.py`, `make_wording_chart.py`), the ops helpers (`restart_app.py`, `start_tunnel.py`, `package.sh`), and the origin instruments (`wmcs_tunnel.py`, `run_via_toolforge.py`, `run_in_pod.sh`). None of it is needed to run or deploy the app — the deploy tarball contains it only because the whole repo is copied. |
 | | *Asking Wikimedia from the right origin* (2026-10-14): `tools/wmcs_tunnel.py` forwards only `api.wikimedia.org` through the Toolforge bastion so a **local** probe egresses from WMCS (`tools/run_via_toolforge.py` runs any probe through it; `python3 tools/wmcs_tunnel.py --check` proves the egress moved, using the CDN's own `x-client-ip` response header). `tools/run_in_pod.sh` runs a repo script **inside the deployed pod**, which is the true production origin. Measured, same images, same hour: home `173.79.30.139` → 0.467–0.610 s/call, via bastion `2a02:ec80:a000:1::1c5` → 0.537–0.599 s, **in the pod `172.16.21.201` → 0.327 s**. So the tunnel is a good way to change the client class — its latency overhead is **≤ ~0.1 s and inside the direct path's own run-to-run spread**, so use it freely — but for a *latency-faithful* number run the script in the pod. (An early run showed a ~0.3 s/call tunnel penalty; that was **our own harness bug**, not the network: `ControlMaster` makes the client `ssh -N` exit immediately, so every call re-spawned ssh inside the timed region. Keep that in mind before trusting an unexplained transport cost.) Write-up: `research/concurrency-2026-10-14.md`; the methods are packaged for other projects as the local skill `toolforge-remote-origins`. |
@@ -249,7 +249,7 @@ fails the suite instead of shipping.
   enforce it or stop calling it a limit; until then the honest description is "counted and
   displayed", and the real brake on overuse is the 429 stop plus a human clicking the button. That
   distinction is why a URL that starts a run by itself is a bad idea —
-  `MEMO-url-parameters-2026-10-14.md`.
+  `docs/MEMO-url-parameters-2026-10-14.md`.
 - **A concurrency setting can be inert, and this one was.** `_next_slot()` paces model-call
   *starts* `SPACING` apart **globally — across workers and across jobs** — so `INFLIGHT>1` can only
   ever overlap a call that *outlasts* `SPACING`. At production speed (0.33 s/call vs `SPACING` 0.9 s)
@@ -437,7 +437,7 @@ and a public tool should not be the thing that load-tests it.
      argument, no semicolon) prints `uid=58240(tools.wikiportraits-eval)`, and so does `sudo -niu`.
      **Beware:** `wikimedia-toolforge`'s own Build Service recipe uses the broken `…; <cmd>` shape, so
      following it literally builds as the wrong account. Full audit with proposed upstream edits:
-     `MEMO-toolforge-skills-2026-10-14.md`.
+     `docs/MEMO-toolforge-skills-2026-10-14.md`.
 
   **Proof that the new image is serving:** `APP_VERSION` in `/api/about` (bump it for every deploy —
   `uptime_s` alone cannot distinguish a fresh pod from a fresh image). The `--mount=none` deploy also
@@ -575,7 +575,7 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
   owner's behalf (that is this agent's default for Phabricator generally).
 - **Toolforge deploy knowledge — what is upstream and what is only here** (checked 2026-10-14 by
   reading the Wikipedia-AI-Skills repo *and* testing on the bastion; full write-up with exact
-  file:line sites and proposed edits: `MEMO-toolforge-skills-2026-10-14.md`):
+  file:line sites and proposed edits: `docs/MEMO-toolforge-skills-2026-10-14.md`):
   - **Upstream and correct:** the `become` vs `sudo -niu` rule (`wikimedia-toolforge` §Guardrails &
     Common Pitfalls). **It is the `;` that matters:** `become <tool> <cmd>` passes the command to
     `become` and **works** (measured `uid=58240(tools.wikiportraits-eval)`), while
@@ -598,7 +598,7 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
   under "Task Specific models"), caps, the rate-limit tiers, the one published benchmark, and the
   "experimental, no SLA" caveat. **It changed on 2026-10-13 05:12 UTC**, hours before the slowdown
   began; that is a coincidence worth checking, not evidence.
-- **Where future ideas live** (asked 2026-10-14). A **feature or idea** belongs in `PRD.md`: §5 is the
+- **Where future ideas live** (asked 2026-10-14). A **feature or idea** belongs in `docs/PRD.md`: §5 is the
   numbered requirement list with a status column, §13 the roadmap (Now / Next / Later), §9 the decision
   plus *what would reopen it*, §12 unresolved questions. The **next thing to do** belongs in §7 of this
   file, ranked, with the trap that makes it worth doing; §8 is known gaps with no plan. A **research
@@ -911,7 +911,7 @@ exists.
    HTTP status). **Hand it over, do not post it** — this agent's default for Phabricator is
    read-only, and a Wikimedia account holder should file or comment in their own name. A
    ready-to-paste comment carrying the transient-503 numbers, the small-sample interval and the
-   questions they raise is **`MEMO-t440223-503-note-draft-2026-10-14.md`**.
+   questions they raise is **`docs/MEMO-t440223-503-note-draft-2026-10-14.md`**.
 4. Only then consider whether §7's probe-and-trend cron is worth building, since that is what makes
    step 3 cheap and routine.
 

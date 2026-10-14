@@ -9,7 +9,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
-DOC = os.path.join(ROOT, "DEVELOPER-NOTE-v0.4.1.md")
+DOC = os.path.join(ROOT, "docs", "DEVELOPER-NOTE-v0.4.1.md")
 # the note cites files all over the tree, so search the same roots the docs do
 SEARCH_DIRS = ("", "tests", "tools", "docs", "research", "static")
 

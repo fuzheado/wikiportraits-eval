@@ -178,8 +178,8 @@ New: `test_reports.py`, `check_js.py`, `verify_live_two.py`, `verify_reports_liv
 `diag_contract_job.py`, `test_pdf_images.py`, `research/sample-report.{pdf,md}` (+ a rendered page
 PNG), `research/wording-experiment-2026-10-13.md` and its raw data.
 Changed: `core.py`, `wiclient.py`, `reports.py`, `pdfmin.py`, `static/index.html`, `test_pipeline.py`,
-`test_render_dom.js`, `test_ui_contract.py`, `run_all_tests.sh`, `package.sh`, `PRD.md`, `README.md`,
-`HANDOFF.md`.
+`test_render_dom.js`, `test_ui_contract.py`, `run_all_tests.sh`, `package.sh`, `docs/PRD.md`, `README.md`,
+`docs/HANDOFF.md`.
 
 **No new dependencies.** Still stdlib-only (the PNG work uses `zlib` and `struct`), which is what
 keeps the Toolforge/WSGI path working without a build step.

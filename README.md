@@ -269,7 +269,7 @@ PORT=8080 python3 app.py       # honour a supplied port (Toolforge does this)
 Optional settings: `THUMB_WIDTH` (960 — must be a step of Commons' `$wgThumbnailSteps` ladder, since
 Commons quantises the request upward; 640 is not a step, so a 640 request downloads the 960 asset and
 reports 960 as its width), `SPACING` (0.9 s between call *starts*, global across
-`INFLIGHT` streams), `INFLIGHT` (**2** — at most two concurrent model calls within a run; call *starts* stay `SPACING` apart globally, so the second worker only overlaps a call that outlasts `SPACING`. It is therefore inert at healthy speeds and worth ~1.8× once the endpoint degrades. `INFLIGHT=1` restores strict serial; 4 streams is measurably worse — `HANDOFF.md` §7.1), `HOURLY_BUDGET` (100 — the app's *own* courtesy cap, not the platform's: see **Be a good citizen**),
+`INFLIGHT` streams), `INFLIGHT` (**2** — at most two concurrent model calls within a run; call *starts* stay `SPACING` apart globally, so the second worker only overlaps a call that outlasts `SPACING`. It is therefore inert at healthy speeds and worth ~1.8× once the endpoint degrades. `INFLIGHT=1` restores strict serial; 4 streams is measurably worse — `docs/HANDOFF.md` §7.1), `HOURLY_BUDGET` (100 — the app's *own* courtesy cap, not the platform's: see **Be a good citizen**),
 `MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run), `PARSE_MAX` (1000 per parse),
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
@@ -313,7 +313,7 @@ Which limit applies depends entirely on **where the app runs**, and the two case
 
 So the 100 calls/hour cap in this app is **self-imposed**, not imposed: on the deployment no external
 quota requires it. It stays because being a good neighbour to a brand-new service (§13 of
-`HANDOFF.md`) matters more than speed here, and because a public tool with no login should not be
+`docs/HANDOFF.md`) matters more than speed here, and because a public tool with no login should not be
 usable as a load generator pointed at the endpoint. Either way the app keeps call *starts* a fixed gap
 apart, stops when the server says 429, is bounded to `UPSTREAM_MAX_ATTEMPTS` attempts on a transient
 gateway error and stops the run outright after `UPSTREAM_ABORT_AFTER` consecutive ones, and caches
@@ -383,7 +383,7 @@ Commons **only when `default_list.txt` is staged**, because a network check shou
 unrelated commit on Wikimedia being up. `SKIP_LIVE=1` and `SKIP_HOOKS=1` override it. The same split
 runs in CI (`.github/workflows/checks.yml`): offline suites on Python 3.9 and 3.12 plus the DOM test
 on every push, and the Commons check on demand. **Neither ever scores a photo** — that spends the
-hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
+hour's quota and calls a service that is still new (see `docs/HANDOFF.md` §13).
 
 ## Project documents
 
@@ -392,17 +392,17 @@ hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
   is read at request time, so it needs no code change. It is never pre-loaded into the box — the page
   starts empty and the list arrives only when someone asks for it. No comment lines in it — a `#` is
   part of a Commons filename, and the parser would treat your comment as a photo name.
-- **`PRD.md`** — what this is for, requirements, architecture, decisions (including rejected
+- **`docs/PRD.md`** — what this is for, requirements, architecture, decisions (including rejected
   alternatives and what would reopen them), risks, roadmap.
-- **`HANDOFF.md`** — for whoever maintains or extends this next: invariants, traps, measured
+- **`docs/HANDOFF.md`** — for whoever maintains or extends this next: invariants, traps, measured
   numbers, and the queue of improvements.
 - **`MEMO-*.md`** — a finished investigation with options and a recommendation, written for a
-  specific reader: `MEMO-url-parameters-2026-10-14.md` (the `?list=` design, including what was
-  deliberately refused), `MEMO-toolforge-skills-2026-10-14.md` (corrections for the Toolforge
-  skill docs upstream) and `MEMO-t440223-503-note-draft-2026-10-14.md` (a ready-to-paste comment for
+  specific reader: `docs/MEMO-url-parameters-2026-10-14.md` (the `?list=` design, including what was
+  deliberately refused), `docs/MEMO-toolforge-skills-2026-10-14.md` (corrections for the Toolforge
+  skill docs upstream) and `docs/MEMO-t440223-503-note-draft-2026-10-14.md` (a ready-to-paste comment for
   the ML team about the transient 503 rate — hand over, do not post). **Where an idea goes:** a
-  feature belongs in `PRD.md` (requirements §5,
-  roadmap §13, decisions §9), the next thing to do in `HANDOFF.md` §7.
+  feature belongs in `docs/PRD.md` (requirements §5,
+  roadmap §13, decisions §9), the next thing to do in `docs/HANDOFF.md` §7.
 - **`research/`** — the question-design pilot (2026-10-13): write-up, raw answers, chart, plus a dated
   copy of the Wikitech rate-limit and benchmark sections. Read this before changing any question
   wording. It also holds the concurrency study (`concurrency-2026-10-14.md` and its raw logs), which

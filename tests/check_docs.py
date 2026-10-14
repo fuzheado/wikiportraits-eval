@@ -6,7 +6,7 @@ import sys
 from typing import Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # this file is in tests/
-DOCS = ["PRD.md", "README.md", "HANDOFF.md"]
+DOCS = ["README.md", "docs/PRD.md", "docs/HANDOFF.md"]
 # texts that name a *shape* rather than a file
 NON_FILES = {"wiki-pageid-sha1-schemahash-width.json"}
 # Paths the docs cite that live in a DIFFERENT repository. They can only be checked where that repo
