@@ -731,8 +731,9 @@ def about_payload() -> dict:
                   "<code>cache/</code>; job state lives in memory and disappears when the server "
                   "restarts. Ticking <b>run fresh</b> ignores those saved answers and re-scores "
                   "every photo, so the speed you see is a real run — it costs one call per photo, "
-                  "which is why it is off by default. The app also counts its own model calls and "
-                  "paces itself at <code>HOURLY_BUDGET</code> per hour — that ceiling is the app's "
+                  "which is why it is off by default. The app also counts its own model calls and shows "
+                  "the count against <code>HOURLY_BUDGET</code> per hour — a <b>display, not a brake</b>: "
+                  "no call is refused when the counter passes it. That ceiling is the app's "
                   "own choice, not the platform's: on Toolforge the endpoint's "
                   "<code>LiftWingLLM</code> policy rates WMCS traffic as effectively unlimited "
                   "(T426749). No accounts, no analytics, no third parties.</li></ul>")},

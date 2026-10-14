@@ -8,7 +8,7 @@ import urllib.error, urllib.parse, urllib.request
 # The app version lives here rather than in core.py because both need it: core reports it (About,
 # reports) and this module puts it in the default User-Agent. One source of truth — before this, the
 # UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.8.1"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
     f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")
@@ -564,7 +564,13 @@ def probe_endpoint(timeout: int = 45) -> dict:
 
 
 def score_image(img_b64: str, budget: Budget, timeout: int = 180) -> dict:
-    """One decision call. Honours the hourly budget and Retry-After."""
+    """One decision call. Honours a 429 `Retry-After`.
+
+    The only gate here is the cooldown. `budget` *counts* calls and `HOURLY_BUDGET` is what that
+    count is displayed against, but nothing here (or in `run_job`) compares `used()` with `limit`,
+    so the hourly ceiling never refuses a call. The brake against overuse is the 429 stop policy
+    plus a human pressing the button — do not describe this as enforcement.
+    """
     wait = budget.wait_seconds()
     if wait > 0:
         time.sleep(min(wait, 300))

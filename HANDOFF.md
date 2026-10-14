@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.7.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.8.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -209,6 +209,14 @@ fails the suite instead of shipping.
   real ceiling is not 100 and the binding protection is the 429 → stop path (§3.7), which
   does not depend on this counter being right. The UI labels it "… since HH:MM" for exactly this
   reason (`Budget.started`, surfaced as `counting_since`).
+  **`HOURLY_BUDGET` is not enforced** (verified 2026-10-14 by reading `wiclient.score_image()` and
+  `Budget` end to end): the only gate before a call is `budget.wait_seconds()`, the 429 cooldown —
+  nothing compares `used()` with `limit`, and `used()` is read only by `status()` for display. The
+  counter can therefore sail past its own ceiling and the UI will read `budget: 137/100`. Either
+  enforce it or stop calling it a limit; until then the honest description is "counted and
+  displayed", and the real brake on overuse is the 429 stop plus a human clicking the button. That
+  distinction is why a URL that starts a run by itself is a bad idea —
+  `MEMO-url-parameters-2026-10-14.md`.
 - **A cached run measures nothing.** If every row says `from cache`, the elapsed time is the disk's,
   not the model's. Tick **run fresh** (`no_cache: true` on `/api/run` and `/api/eval`) — it bypasses the
   read side of the cache and re-scores every photo at one call each, with the hourly budget and
