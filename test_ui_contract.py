@@ -19,7 +19,11 @@ def get(path, raw=False):
     req = urllib.request.Request(URL + path, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=180) as r:
         data = r.read()
-        return (data, dict(r.headers)) if raw else (json.loads(data), dict(r.headers))
+        # Return the HTTPMessage itself — NOT `dict(r.headers)`. Header names arrive lower-cased
+        # through the public URL (the Toolforge ingress normalises them, and HTTP/2 mandates it),
+        # so a plain dict makes `hdr.get("Content-Type")` a silent None over the deployment while
+        # passing against a local `http.server`. HTTPMessage.get() is case-insensitive.
+        return (data, r.headers) if raw else (json.loads(data), r.headers)
 
 
 def post(path, obj):
