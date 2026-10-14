@@ -135,6 +135,10 @@ https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&run=1&vie
   spending remains a deliberate act by the person looking at it.
 - **`&view=pose`** (or `view=combined`) reproduces the chart view, so a link can point at the strata
   rather than the single axis.
+- **`GET /api/eval?list=…`** is the readable twin of a share link: it returns the same ranked JSON
+  with **no model calls at all** (anything unscored comes back marked `uncached`), which is what
+  makes it safe to put in a link. `POST /api/eval` is the one that scores, and it is a POST for
+  exactly that reason.
 - **`Copy API link`** writes the same run as a ready-to-paste `curl` command against `POST`
   `/api/eval`, which returns the ranked JSON in one blocking call. It is deliberately a *command
   you run* rather than a URL that runs on `GET`: a `GET` with a spending side effect fires from link

@@ -6,7 +6,7 @@
    field the renderer reads
 3. the public URL serves the page, the API and all four report formats
 """
-import json, re, sys, time, urllib.request
+import json, re, sys, time, urllib.parse, urllib.request
 
 import wiclient as _wc      # the same constants the server runs, so fields can be diffed
 import core as _pg          # the live prompt/config constants (and the default-list cap)
@@ -230,6 +230,23 @@ print(f"  {len(dl_lines)} entries from {dl.get('source')} — "
 for b in bad_list:
     print(f"  MISSING {b}")
 
-all_bad = bad + bad_about + bad_list
+# 6. the cache-only GET: the API twin of a share link — it must read, never spend
+print("\ncache-only GET /api/eval:")
+ev, _h = get("/api/eval?list=" + urllib.parse.quote("File:Baba Sissoko-63495.jpg"))
+bad_get = []
+if not isinstance(ev.get("results"), list) or not ev["results"]:
+    bad_get.append("no results[] in the response")
+if not ev.get("cached_only"):
+    bad_get.append("the payload does not claim cached_only")
+row = (ev.get("results") or [{}])[0]
+if row.get("status") not in ("done", "uncached"):
+    bad_get.append(f"unexpected status {row.get('status')!r}")
+if row.get("status") == "done" and not row.get("from_cache"):
+    bad_get.append("a scored photo from a cache-only GET must be from_cache")
+print(f"  1 file -> status={row.get('status')}, from_cache={row.get('from_cache')}")
+for b in bad_get:
+    print(f"  MISSING {b}")
+
+all_bad = bad + bad_about + bad_list + bad_get
 print("\nRESULT:", "PASS" if not missing and not all_bad
       else f"FAIL missing={sorted(missing)} bad={all_bad}")

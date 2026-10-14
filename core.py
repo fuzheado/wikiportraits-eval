@@ -4,7 +4,7 @@ Keeping it in one place means the Toolforge build path (`Procfile: python3 app.p
 traditional uWSGI path (`src/app.py` exposing `app`) run identical code.
 """
 import base64, json, os, queue, re, threading, time, traceback, uuid
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import reports, wiclient
 from wiclient import (APP_VERSION, Budget, CANDIDATE_FLOOR, QUESTIONS, SCHEMA_HASH, STATE,
@@ -829,6 +829,10 @@ def about_payload() -> dict:
                   "POST /api/eval                {\"files\": [\"File:A.jpg\", …]} → blocked, final\n"
                   "                                results (≤ " + str(EVAL_MAX) + " files per call)\n"
                   "GET  /api/job/&lt;id&gt;/report.{md,json,csv,pdf}</pre>"
+                  "<p><code>GET /api/eval?list=…</code> is the readable twin of a share link: the same "
+                  "ranked JSON with no model calls at all — anything unscored comes back as "
+                  "<code>uncached</code>. <code>POST /api/eval</code> is the one that scores; the "
+                  "GET form exists only because it cannot spend.</p>"
                   "<p>The <b>Copy API link</b> button under a finished run writes a ready-to-paste <code>curl</code> "
                   "command for that exact list (split per <code>EVAL_MAX</code> if it is long). It is a "
                   "command to run rather than a URL: a GET that scores would fire from link previews and "
@@ -921,6 +925,24 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                 return js({"text": text, "source": "default_list.txt",
                            "count": len([l for l in text.splitlines() if l.strip()]),
                            "is_example_list": True})
+            if path == "/api/eval":
+                # The API twin of the share link, and the reason it is safe to hand out: a GET must be
+                # incapable of spending, so cached_only is *forced* here rather than read from the
+                # query (a `no_cache` parameter is ignored outright). Resolving the titles is one
+                # batched Commons call per wiki; no model call is possible.
+                text = parse_qs(query or "").get("list", [""])[0]
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                if not lines:
+                    return js({"error": "GET /api/eval?list=<file names, one per line> — reads saved "
+                                        "answers only; POST /api/eval to actually score"}, 400)
+                if len(lines) > MAX_INPUT_ITEMS:
+                    return js({"error": f"at most {MAX_INPUT_ITEMS} files (MAX_INPUT_ITEMS; got "
+                                        f"{len(lines)})"}, 413)
+                job = new_job("\n".join(lines), cached_only=True)
+                if not job["items"]:
+                    return js({"error": "nothing to read", "warnings": job["warnings"]}, 400)
+                run_job(job)
+                return js(_eval_payload(job))
             if path == "/api/config":
                 return js({"model": "llm-clef-flash", "endpoint": wiclient.LIFTWING,
                            "thumb_width_requested": THUMB_WIDTH, "spacing_s": SPACING,
@@ -969,13 +991,7 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                 if not job["items"]:
                     return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
                 run_job(job)          # synchronous: /api/eval blocks until the whole run finishes
-                return js({"job_id": job["id"], "status": job["status"],
-                           "elapsed_s": job.get("elapsed_s"),
-                           "probe": job.get("probe"), "spread": job.get("spread"),
-                           "stats": job.get("stats"), "latency": latency_summary(job),
-                           "results": [_eval_row(i) for i in job["items"]],
-                           "reports": {f"report.{f}": f"/api/job/{job['id']}/report.{f}"
-                                       for f in ("md", "json", "csv", "pdf")}})
+                return js(_eval_payload(job))
             if path == "/api/parse":
                 parsed = wiclient.parse_entries(data.get("text", ""))
                 if len(parsed["items"]) > PARSE_MAX:
@@ -1016,6 +1032,18 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
     except Exception:
         traceback.print_exc()
         return 500, "application/json", json.dumps({"error": "server error"}).encode(), {}
+
+
+def _eval_payload(job) -> dict:
+    """The /api/eval response, shared by the POST (which scores) and the GET (which only reads)."""
+    return {"job_id": job["id"], "status": job["status"],
+            "elapsed_s": job.get("elapsed_s"),
+            "cached_only": bool(job.get("cached_only")),
+            "probe": job.get("probe"), "spread": job.get("spread"),
+            "stats": job.get("stats"), "latency": latency_summary(job),
+            "results": [_eval_row(i) for i in job["items"]],
+            "reports": {f"report.{f}": f"/api/job/{job['id']}/report.{f}"
+                        for f in ("md", "json", "csv", "pdf")}}
 
 
 def _eval_row(item: dict) -> dict:

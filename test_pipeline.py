@@ -11,6 +11,7 @@ Serial execution would cost n*(DOWNLOAD_S + MODEL_S) plus the spacing between ca
 Pipelined execution should cost roughly n*MODEL_S + DOWNLOAD_S. The assertions below
 check that overlap actually happened, not just that the total looks small.
 """
+import json
 import os
 import sys
 import tempfile
@@ -338,6 +339,40 @@ finally:
     wiclient.UPSTREAM_RETRY_BACKOFF = real_backoff
     wiclient.score_image = fake_score
 
+# --- the cache-only GET: the API twin of a share link, and why it is safe to hand out --------
+# A GET must be incapable of *spending*: it resolves the titles (one batched Commons call) and reads
+# saved answers. So a warm photo comes back from cache, an unscored one comes back marked uncached,
+# and neither can make a model call.
+import urllib.parse as _up
+
+before = model_calls()
+status, _ct, payload, _hd = core.route("GET", "/api/eval", b"",
+                                       "list=" + _up.quote("File:Test 1.jpg"))
+body = json.loads(payload)
+if status != 200:
+    failures.append(f"GET /api/eval should be 200, got {status}")
+if model_calls() != before:
+    failures.append(f"a cache-only GET spent {model_calls() - before} model call(s)")
+if not body.get("cached_only"):
+    failures.append("the GET payload does not say it was cache-only")
+if not (body.get("results") or [{}])[0].get("from_cache"):
+    failures.append(f"a warm photo should come back from cache: {(body.get('results') or [{}])[0]}")
+
+# a cold cache, not a differently-named file: fake_resolve numbers pageids by position, so another
+# title would land on the same key and come back from cache
+with fresh_cache():
+    status2, _ct2, payload2, _hd2 = core.route("GET", "/api/eval", b"",
+                                               "list=File:Never Scored.jpg")
+    b2 = json.loads(payload2)
+    if (b2.get("results") or [{}])[0].get("status") != "uncached":
+        failures.append(f"an unscored photo should be reported as uncached: "
+                        f"{(b2.get('results') or [{}])[0]}")
+    if model_calls() != before:
+        failures.append("the cold cache-only GET spent a call")
+if core.route("GET", "/api/eval", b"", "")[0] != 400:
+    failures.append("GET /api/eval with no list should be a 400")
+
+print(f"cache-only GET    : warm -> from_cache, cold -> uncached, {model_calls() - before} model calls total")
 print(f"retry             : 503 then 200 -> {st1['n']} calls (scored); 503 twice -> {st2['n']} calls "
       f"(error); 400 -> {st3['n']} call (no retry)")
 print(f"cache             : repeat run {n_cached}/{N} cached with {spent_repeat} calls; "
