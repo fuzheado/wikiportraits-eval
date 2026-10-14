@@ -262,10 +262,34 @@ and a public tool should not be the thing that load-tests it.
   A quick tunnel dies with the process — it is a preview, not a deployment.
 - **Deployed to Toolforge 2026-10-13** as the tool **`wikiportraits-eval`**
   (`https://wikiportraits-eval.toolforge.org`), Build Service backend, source
-  `https://github.com/Fuzheado/wikiportraits-eval` (public, MIT). Deploy command set:
-  `toolforge build start https://github.com/Fuzheado/wikiportraits-eval` then
-  `toolforge webservice buildservice start --mount=none -m 512Mi`; logs via
+  `https://github.com/Fuzheado/wikiportraits-eval` (public, MIT). Logs via
   `kubectl logs deployment/wikiportraits-eval` from the tool account.
+- **Verified deploy procedure (2026-10-14, v0.6.1 — this exact sequence works):**
+
+  ```bash
+  ssh alih@dev.toolforge.org          # then, at each step, `sudo -niu tools.wikiportraits-eval …`
+  toolforge build start https://github.com/fuzheado/wikiportraits-eval   # prints the new digest
+  toolforge webservice buildservice stop                                 # REQUIRED, see below
+  toolforge webservice buildservice start \
+    --buildservice-image tool-wikiportraits-eval/tool-wikiportraits-eval@sha256:<digest> \
+    --mount=none -m 512Mi
+  curl -s https://wikiportraits-eval.toolforge.org/api/about | … app_version
+  ```
+
+  Two gotchas, both hit for real:
+  1. **`--buildservice-image` wants `namespace/name`, not the full registry path.** The build output
+     prints `tools-harbor.wmcloud.org/tool-wikiportraits-eval/tool-wikiportraits-eval@sha256:…`, and
+     pasting that gives `error: Expected build service image in 'namespace/name' format`. Use
+     `tool-wikiportraits-eval/tool-wikiportraits-eval@sha256:…`.
+  2. **`start` is a no-op while a webservice is already running** — it answers "Your job is already
+     running" and keeps serving the *old* image. Hence `stop` first: a `start` without a preceding
+     `stop` silently deploys nothing.
+  3. Use `sudo -niu tools.wikiportraits-eval <cmd>` over SSH, never `become` (the skill's trap: chained
+     commands after `become` run in the *original* user's shell).
+
+  **Proof that the new image is serving:** `APP_VERSION` in `/api/about` (bump it for every deploy —
+  `uptime_s` alone cannot distinguish a fresh pod from a fresh image). The `--mount=none` deploy also
+  starts with `cache_entries: 0`: the in-pod cache is wiped on every restart by design (§7.4).
 - **Endpoint state, 2026-10-13:** the `EngineCore` outage from deploy time resolved the same day;
   since then the endpoint has oscillated between ~0.3-0.5 s warm, ~5 s, and ~29-31 s per call
   (`service-side` verdict) — sometimes within the same hour, with text-only calls equally slow,
