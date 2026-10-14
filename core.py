@@ -469,9 +469,25 @@ def run_job(job):
                 item["scoring_started"] = time.time()  # the UI ticks its "waiting for the model" clock
                 item["sent_px"] = sent_px
                 res = wiclient.score_image(payload, BUDGET)
+                # One bounded retry, and only for failures that can be transient:
+                #   429 — the server said when to come back (Retry-After); and
+                #   502/503/504 — the gateway could not reach the model at all ("upstream
+                #     connect error or disconnect/reset before headers … connection
+                #     timeout"), so the photo was never processed.
+                # A 4xx is a client-side fault (malformed body, bad User-Agent) and is never
+                # retried. One retry in total, never a loop: this is a shared, experimental
+                # service (T440223).
                 if res.get("http") == 429:
                     item["rate_limited"] = True
                     log(job, f"429 — waiting {res.get('retry_after')}s, then one retry")
+                    res = wiclient.score_image(payload, BUDGET)
+                elif res.get("http") in wiclient.UPSTREAM_RETRY_CODES:
+                    item["upstream_retry"] = True
+                    log(job, f"HTTP {res.get('http')} from the gateway — the model was not "
+                             f"reached, so nothing was processed; retrying once in "
+                             f"{wiclient.UPSTREAM_RETRY_BACKOFF}s "
+                             f"({str(res.get('detail', ''))[:200]})")
+                    time.sleep(wiclient.UPSTREAM_RETRY_BACKOFF)
                     res = wiclient.score_image(payload, BUDGET)
                 item["scoring_s"] = round(time.time() - item["scoring_started"], 2)
                 out.put(("res", item, res, None, dt))
@@ -513,9 +529,15 @@ def run_job(job):
                          f"quality {a['quality']['score']:.2f}, pose {a['pose']['choice']}, "
                          f"{res['wall_s']}s")
             else:
+                code = res.get("http")
+                detail = str(res.get("detail") or "")
                 item.update({"status": "error",
-                             "error": f"{res.get('error')}: {str(res.get('detail', ''))[:120]}"})
-                log(job, f"{item['title']} — failed: {res.get('error')}")
+                             "error": f"HTTP {code} {res.get('error')}"
+                                      + (f": {detail[:160]}" if detail else "")})
+                # the *run log* keeps the whole gateway body (300 chars from score_image): a
+                # truncated cell once hid the one word that identified a 503 as a connect error
+                log(job, f"{item['title']} — failed: HTTP {code} {res.get('error')}"
+                         + (f" — {detail}" if detail else ""))
             _refresh_derived(job)          # this photo is readable now, not at the end of the run
             _progress(job)
         stop.set()
@@ -775,7 +797,11 @@ def about_payload() -> dict:
                   "no call is refused when the counter passes it. That ceiling is the app's "
                   "own choice, not the platform's: on Toolforge the endpoint's "
                   "<code>LiftWingLLM</code> policy rates WMCS traffic as effectively unlimited "
-                  "(T426749). No accounts, no analytics, no third parties.</li></ul>")},
+                  "(T426749). No accounts, no analytics, no third parties. <b>What is logged:</b> one line per request with the method, path and "
+                  "status — no query string, no IP address and no User-Agent — plus a per-run log "
+                  "held in memory and a per-photo cache entry. Toolforge logs requests at the "
+                  "platform layer; this app neither reads nor republishes that. If usage is ever "
+                  "measured it will be as counters, not as logs.</li></ul>")},
         {"title": "HTTP API",
          "html": ("<p>Everything the page does is also available programmatically. Client "
                   "timeout should be generous — a call blocks until the whole run finishes "

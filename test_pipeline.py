@@ -242,6 +242,104 @@ if cold["status"] != "done":
 if not any("not in cache" in line for line in cold["log"]):
     failures.append("a cold replay does not say why nothing was scored")
 
+# --- one bounded retry on a transient upstream failure ----------------------------------------
+# A 503 from the gateway means the model was never reached, so one retry is worth it. A 400 is a
+# client-side fault and must never be retried; and neither case may loop.
+import contextlib
+
+
+def ok_payload():
+    return {"http": 200, "wall_s": 0.02, "ttfb_s": 0.02,
+            "usage": {"input_tokens": 900, "output_tokens": 0},
+            "answers": {"face_visible": {"noul": 0.9},
+                        "pose": {"choice": "head_shoulders", "probabilities": {"head_shoulders": 0.8}},
+                        "quality": {"score": 2.5, "confidence": 0.5, "probabilities": {"2": 0.5}},
+                        "eyes_to_camera": {"noul": 0.9}, "infobox_ready": {"noul": 0.5},
+                        "publish_ready": {"choice": "publish", "confidence": 0.8,
+                                          "probabilities": {"publish": 0.8, "pass": 0.2}}}}
+
+
+def scripted(seq):
+    """A score_image returning the given responses in order, counting calls."""
+    state = {"n": 0}
+
+    def fake(b64, budget):
+        state["n"] += 1
+        return seq[min(state["n"] - 1, len(seq) - 1)]
+    return fake, state
+
+
+@contextlib.contextmanager
+def fresh_cache():
+    """An empty cache directory.
+
+    Each case needs its own: a successful case writes its answer, and every single-photo job here
+    resolves to the *same* cache key (fake_resolve numbers pageids by position), so a shared cache
+    would serve case 1's answer to case 2 and score_image would never be called.
+    """
+    real = core.CACHE_DIR
+    core.CACHE_DIR = tempfile.mkdtemp(prefix="wp-retry-")
+    try:
+        yield
+    finally:
+        core.CACHE_DIR = real
+
+
+def run_one():
+    job = core.new_job("File:Retry 1.jpg")
+    core.run_job(job)
+    return job
+
+
+gw_503 = {"http": 503, "wall_s": 0.1, "error": "request failed",
+          "detail": '{"httpCode":503,"httpReason":"upstream connect error or disconnect/reset '
+                    'before headers. reset reason: connection timeout"}'}
+gw_400 = {"http": 400, "wall_s": 0.05, "error": "request failed",
+          "detail": '{"error":"Image at index 0 is not valid base64"}'}
+
+real_backoff = wiclient.UPSTREAM_RETRY_BACKOFF
+wiclient.UPSTREAM_RETRY_BACKOFF = 0.01          # keep the suite fast
+try:
+    with fresh_cache():                          # 503 once, then 200
+        fake1, st1 = scripted([gw_503, ok_payload()])
+        wiclient.score_image = fake1
+        j1 = run_one()
+    if st1["n"] != 2:
+        failures.append(f"a transient 503 should be retried exactly once (made {st1['n']} calls)")
+    if j1["items"][0]["status"] != "done":
+        failures.append(f"the retried photo should end up scored: {j1['items'][0].get('error')}")
+    if not j1["items"][0].get("upstream_retry"):
+        failures.append("the retry is not recorded on the item")
+    if not any("retrying once" in line for line in j1["log"]):
+        failures.append("the retry does not appear in the run log")
+
+    with fresh_cache():                          # 503 every time
+        fake2, st2 = scripted([gw_503])
+        wiclient.score_image = fake2
+        j2 = run_one()
+    if st2["n"] != 2:
+        failures.append(f"a persistent 503 must stop after ONE retry (made {st2['n']} calls)")
+    if j2["items"][0]["status"] != "error":
+        failures.append("a twice-failed photo should be an error")
+    if "503" not in (j2["items"][0].get("error") or ""):
+        failures.append(f"the item error should name the HTTP status: {j2['items'][0].get('error')!r}")
+    if not any("connection timeout" in line for line in j2["log"]):
+        failures.append("the full gateway body should reach the run log, not just the row")
+
+    with fresh_cache():                          # a client-side fault: never retried
+        fake3, st3 = scripted([gw_400])
+        wiclient.score_image = fake3
+        j3 = run_one()
+    if st3["n"] != 1:
+        failures.append(f"a 400 must NOT be retried (made {st3['n']} calls)")
+    if j3["items"][0]["status"] != "error":
+        failures.append("a 400 should still be reported as an error")
+finally:
+    wiclient.UPSTREAM_RETRY_BACKOFF = real_backoff
+    wiclient.score_image = fake_score
+
+print(f"retry             : 503 then 200 -> {st1['n']} calls (scored); 503 twice -> {st2['n']} calls "
+      f"(error); 400 -> {st3['n']} call (no retry)")
 print(f"cache             : repeat run {n_cached}/{N} cached with {spent_repeat} calls; "
       f"no_cache re-scored all {N} ({spent_fresh} calls) in {fresh.get('elapsed_s')}s")
 print(f"replay            : warm {spent_warm} calls, all from cache; cold {spent_cold} calls, all marked uncached")

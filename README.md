@@ -224,6 +224,12 @@ pre-flight check.
 - Sent to the model: the image bytes and a fixed, published context sentence. **Not sent**: file
   names, page text, user names, or anything about who is in the photo.
 - Results are cached locally; job state lives in memory. No accounts, no analytics, no third parties.
+- **What is logged:** the app writes one line per request — method, path, status — with **no query
+  string, no IP address and no User-Agent**, and a per-run log (in memory, shown in *Run log*) with
+  resolution counts, per-photo scores and any error body. Toolforge's own platform log does record
+  IP and User-Agent; that is the platform's log, and this app neither reads nor publishes it. If
+  usage is ever measured, it is as **counters** (photos scored, cache hits, failures) rather than
+  richer logs.
 
 ## Running it yourself
 

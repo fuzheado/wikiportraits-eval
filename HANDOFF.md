@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.13.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.14.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -291,6 +291,14 @@ How the app handles it: every call records `wall_s` (total) and `ttfb_s` (time t
 gateway holding the request) plus `x-envoy-upstream-service-time`, and `latency_summary()` labels the
 run `normal` / `elevated` / `service-side` against `BASELINE_WARM_S` (0.54 s, env-overridable). The
 verdict shows in the UI, the run log and the reports.
+
+**A 5xx is retried once; a 4xx never.** The gateway's `503 upstream connect error or disconnect/
+reset before headers … connection timeout` means the model was never reached, so the photo was not
+processed and one retry (2 s backoff, logged, one attempt only) recovers most of them — the app
+otherwise loses the photo outright, which is what a real 503 did on 2026-10-14. `429` keeps its own
+single retry driven by the server's `Retry-After`, and a `4xx` (malformed body, bad User-Agent) is a
+client-side fault that retrying cannot fix. `UPSTREAM_RETRY_CODES` / `UPSTREAM_RETRY_BACKOFF` in
+`wiclient.py`; `test_pipeline.py` asserts one retry, no loop, and no retry on a 400.
 
 **Before "fixing" a slow run: run `probe_latency_now.py` (4 calls) and check whether text-only is
 also slow.** If it is, the app is innocent — record the number and move on. Do not add retries or
@@ -793,6 +801,27 @@ exists.
    read-only, and a Wikimedia account holder should file or comment in their own name.
 4. Only then consider whether §7's probe-and-trend cron is worth building, since that is what makes
    step 3 cheap and routine.
+
+**What this app logs — audited 2026-10-14; keep it this way.** Two layers, and only one is ours:
+
+| layer | contains | notes |
+|---|---|---|
+| **Toolforge's own request log** (`/data/project/<tool>/logs/`, plus the ingress) | client **IP** and **User-Agent** | not ours to change; per the `wikimedia-security-and-privacy` skill, do **not** publish it, copy it into the repo, or ship it to any third party (Sentry/Logstash/…) |
+| **the app's stdout** (container log) | `[time] "METHOD path HTTP/1.1" status -` | no IP, no User-Agent by construction (`log_request` formats only the request line), and since 2026-10-14 **no query string** (`app.redact_query()`), because a `?list=` link carries up to 4 KB of user-supplied file names |
+| **the per-run log** (in memory; the UI's *Run log*) | resolution counts, per-photo scores, cache hits, retries, and the **full** gateway error body on failure | dies with the pod, so it is not a durable record; the item *row* caps its message at 160 characters |
+| **`cache/*.json`** | per photo: `title`, answers, `http`, `wall_s`, `ttfb_s`, token counts | a record of *which files were scored*, not of who scored them; wiped on restart (`--mount=none`) |
+
+So the model and the pipeline are measurable; **visitors are not identified**. No IP, no User-Agent,
+no cookie, no session, no third-party analytics, and nothing is derived about the people *in* the
+photographs (§8).
+
+**If usage measurement is wanted, add counters, not richer logs** — one structured line per
+completed run: photos scored, cache hits, fresh calls, 429s, upstream retries, median call time, run
+wall time, and the *item count*. Never the titles, never the query, never a client attribute; that
+answers "is it used, is it fast, is it failing" with nothing personal in it. Retention is bounded
+either way: the container log rotates on the platform, and a counters file inside the pod spans one
+pod lifetime at most (`--mount=none`), so a real trend needs the NFS mount (§7.4) or the platform's
+own log retention.
 
 **One caution.** Because this app is a heavy consumer of a young service, "the app is fine" is not
 the same as "the numbers are stable". Latency is the *visible* churn; if the serving stack's image

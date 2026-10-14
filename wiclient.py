@@ -8,7 +8,7 @@ import urllib.error, urllib.parse, urllib.request
 # The app version lives here rather than in core.py because both need it: core reports it (About,
 # reports) and this module puts it in the default User-Agent. One source of truth — before this, the
 # UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
-APP_VERSION = "0.13.0"
+APP_VERSION = "0.14.0"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
     f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")
@@ -23,6 +23,12 @@ THUMB_LADDER = (20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840)
 MODEL_MAX_WIDTH = 640        # the vision encoder normalises to this width, whatever you send
 THUMB_WIDTH = int(os.environ.get("THUMB_WIDTH", "960"))   # must be a THUMB_LADDER step
 SPACING = float(os.environ.get("SPACING", "0.9"))          # seconds between scoring calls
+# A 5xx from the gateway that failed *before headers* — Envoy's "upstream connect error or
+# disconnect/reset before headers … connection timeout" — means the model was never reached, so one
+# retry is worth it. A 4xx is a client-side fault (400 malformed body, 403 missing User-Agent) and
+# retrying cannot fix it. One retry in total, never a loop: this is a shared, experimental service.
+UPSTREAM_RETRY_CODES = (502, 503, 504)
+UPSTREAM_RETRY_BACKOFF = float(os.environ.get("UPSTREAM_RETRY_BACKOFF", "2.0"))
 
 STATE = ("WikiPortraits photograph of a public figure, taken by a volunteer photographer at an "
          "event photo booth. Assess the photograph itself, not the person's fame.")

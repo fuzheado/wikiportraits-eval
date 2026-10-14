@@ -9,6 +9,7 @@ Toolforge (Build Service): Procfile `web: python3 app.py`, no pip install needed
 Toolforge (traditional uWSGI backend): use wsgi.py, which exposes `app`.
 """
 import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -17,12 +18,30 @@ import core
 PORT = int(os.environ.get("PORT", "8765"))
 
 
+def redact_query(msg: str) -> str:
+    """Remove query strings from a log line before it is written.
+
+    Data minimisation. A `?list=` deep link puts as much as 4 KB of user-supplied file names into the
+    request line, and every parameter added later lands in the same slot — so nothing after the "?"
+    belongs in a log. The path alone is what is useful for debugging; *how often* deep links are used
+    is a question for a counter, not for a copy of the contents.
+
+    Note what this does NOT try to do: the Toolforge platform logs every request itself, with the
+    client IP and User-Agent, in /data/project/<tool>/logs/. That is the platform's log, not ours to
+    change, publish, or export — see the privacy note in HANDOFF §13.
+    """
+    return re.sub(r"\?[^ \"']*", "?<redacted>", msg)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "WikiPortraitsEval/0.4"
 
     def log_message(self, fmt, *args):
+        # `BaseHTTPRequestHandler.log_request` formats the request line, status and size — it does
+        # not include the client address (the default `log_message` would). So this log has no IP and
+        # no User-Agent by construction; the redaction below removes the query as well.
         if os.environ.get("QUIET") != "1":
-            print(f"[{self.log_date_time_string()}] {fmt % args}", flush=True)
+            print(f"[{self.log_date_time_string()}] {redact_query(fmt % args)}", flush=True)
 
     def _respond(self):
         n = int(self.headers.get("Content-Length") or 0)
