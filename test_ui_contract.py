@@ -81,10 +81,10 @@ required = {
     "thumb CSS rule": ".item .thumb{" in html,
     "list is NOT re-rendered wholesale": '$("items").innerHTML' not in js,
     # deep links: the URL layer must never grow a second splitter (invariant 1) and must stay inert
-    # unless a ?list= was supplied; and a link may press Check inputs but never Score them
+    # unless a ?list= was supplied; and a link may press Validate files but never Score them
     "deep links add no comma splitting": 'split(",")' not in js,
     "deep links are gated on ?list=": 'qs.get("list")' in js,
-    "deep links press Check inputs, never Score them":
+    "deep links press Validate files, never Score them":
         '$("check").click()' in js and '$("run").click()' not in js,
     "deep links have a hard length cap": 'URL_LIST_HARD_MAX' in js,
     # the exported PDF chart must follow the on-screen view, so the download URL carries it

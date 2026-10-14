@@ -178,12 +178,12 @@
       placeholder="Foo.jpg&#10;File:Foo.jpg&#10;https://commons.wikimedia.org/wiki/File:Foo.jpg&#10;https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg&#10;&#10;example formats only — this is a hint, not a list. Paste your own, or press “Load sample list” for 12 real Commons photos."></textarea>
     <div class="row" style="margin-top:10px">
       <button id="load-test" title="Load the 12 sample photos from default_list.txt so you can try a real run">Load sample list</button>
-      <button id="check" class="primary">Check inputs</button>
+      <button id="check" class="primary">Validate files</button>
       <button id="run" disabled>Score them</button>
       <label class="meter" id="nocache-label" style="display:flex;align-items:center;gap:6px"
         title="Ignore answers already saved on this server and call the model for every photo, so the speed you see is a real run. Costs one call per photo (the hourly budget still applies).">
         <input type="checkbox" id="nocache"> run fresh (ignore saved answers)</label>
-      <span id="parseinfo" class="pill">nothing checked yet</span>
+      <span id="parseinfo" class="pill">nothing validated yet</span>
       <span class="grow"></span>
       <span id="budget" class="meter">budget: —</span>
     </div>
@@ -746,7 +746,7 @@ function clearAll() {
   clearResults();
   $("parsedbody").innerHTML = "";
   $("warnings").innerHTML = "";
-  $("parseinfo").textContent = "nothing checked yet";
+  $("parseinfo").textContent = "nothing validated yet";
   $("parsedsummary").textContent = "resolved inputs";
 }
 
@@ -780,10 +780,10 @@ $("confirm-overlay").addEventListener("click", (e) => {
   if (e.target === $("confirm-overlay")) answerConfirm(false);
 });
 
-// Button affordance. The flow is Check inputs -> Score them, so exactly one button is the obvious
+// Button affordance. The flow is Validate files -> Score them, so exactly one button is the obvious
 // next step at any moment: the blue "primary" style moves with the stage, rather than sitting on
-// "Check inputs" forever while the user wonders what to do next.
-//   idle    — nothing checked yet (or the list changed since the last check)
+// "Validate files" forever while the user wonders what to do next.
+//   idle    — nothing validated yet (or the list changed since the last validation)
 //   checked — the list resolved, so Score them is armed and blue
 //   running — both disabled; the progress panel is the thing to watch
 //   done    — the run finished; neither is highlighted, the results are the focus
@@ -872,8 +872,8 @@ $("load-test").onclick = async () => {
     if (!d || typeof d.text !== "string" || !d.text.trim()) throw new Error("empty list");
     $("input").value = d.text;
     $("input").classList.remove("hint-off");
-    setStage("idle");          // loaded but not yet checked — "Check inputs" is the next step
-    $("parseinfo").textContent = `${d.count || 0} test photos loaded — press Check inputs`;
+    setStage("idle");          // loaded but not yet validated — "Validate files" is the next step
+    $("parseinfo").textContent = `${d.count || 0} test photos loaded — press Validate files`;
   } catch (e) {
     $("parseinfo").textContent = "could not load the test list — paste your own list instead";
   } finally {
@@ -888,7 +888,7 @@ $("input").addEventListener("blur", () => { if (!$("input").value) $("input").cl
 $("input").addEventListener("input", () => {
   if (timer) return;                       // a run is in flight; don't touch the flow
   setStage("idle");
-  $("parseinfo").textContent = "not checked yet — press Check inputs";
+  $("parseinfo").textContent = "not validated yet — press Validate files";
 });
 
 // ---- deep links: a list may arrive in the URL, but a link never starts a run ------------------
@@ -921,12 +921,12 @@ function applyUrlParams() {
   }
   $("input").value = text;
   $("input").classList.remove("hint-off");
-  setStage("idle");                                // loaded, not checked: Check inputs is next
+  setStage("idle");                                // loaded, not validated: Validate files is next
   $("parseinfo").textContent = `${n} photo${n === 1 ? "" : "s"} came from the link`
     + (raw.length > URL_LIST_SOFT_MAX ? " (long link — pasting is more reliable)" : "")
     + (qs.get("check") === "1" && n > URL_LIST_ACTION_MAX
         ? ` — not auto-checked: more than ${URL_LIST_ACTION_MAX} entries`
-        : " — press Check inputs");
+        : " — press Validate files");
   if (qs.get("check") === "1" && n <= URL_LIST_ACTION_MAX) $("check").click();
 }
 applyUrlParams();

@@ -1,11 +1,14 @@
 # WikiPortraits Eval
 
 **Paste a list of Commons photos → get a ranked table of which ones work as a Wikipedia portrait,
-with the reasons, and a report you can attach to an email.**
+with the reasons, and a report you can download as a PDF or as data (JSON/CSV).**
 
 WikiPortraits events produce thousands of photographs, and the hard part is not taking or uploading
-them — it is choosing. This tool puts every photo in front of a Wikimedia-hosted model that answers
-six specific questions about it, then sorts them so the strongest candidates are at the top.
+them — it is choosing. This tool puts every photo in front of **Clef**, Cloudflare's open-weight
+**decision model**, served by the Wikimedia Foundation on
+[LiftWing](https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models).
+Clef writes no prose: it returns a probability for each of six specific questions about the picture,
+and the tool sorts the photos so the strongest candidates are at the top.
 
 **Live:** <https://wikiportraits-eval.toolforge.org> · code:
 <https://github.com/fuzheado/wikiportraits-eval> · all model calls are made by the server
@@ -14,21 +17,12 @@ six specific questions about it, then sorts them so the strongest candidates are
 It does not edit, tag or upload anything. It reads photos and tells you what a model thinks of them,
 with the model's exact questions shown to you.
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ 1 · Photos            [ paste your filenames or URLs ]       │
-│                       [ Check inputs ]  [ Score them ]       │
-├──────────────────────────────────────────────────────────────┤
-│ 2 · Progress   8 / 12 images   endpoint normal · median 0.6s │
-├──────────────────────────────────────────────────────────────┤
-│ 3 · Results     [thumbnail] File:X at Y.jpg      done        │
-│                 infobox ready       ▓▓▓▓▓▓▓░░░░  0.657       │
-│                 face visible        ▓▓▓▓▓▓▓▓▓▓░  0.97        │
-│                 pose → three_quarter                          │
-│                 quality → 2.86/4                              │
-│                 Download: Markdown · JSON · CSV · PDF         │
-└──────────────────────────────────────────────────────────────┘
-```
+![The composite-by-photo chart above the ranked results: every thumbnail labelled with its rank,
+then one result card showing the score bars for composite, P(publish), infobox-readiness, face
+visibility, eye contact, pose and quality](docs/screenshot.png)
+
+*A 12-photo run on the sample list. The chart places every photo on one axis; the cards below it
+show why each one scored as it did. The same run also exports as Markdown, JSON, CSV and PDF.*
 
 ## What you get
 
@@ -58,7 +52,7 @@ with the model's exact questions shown to you.
    accident. Press **Load sample list** to fill it with the 12 real Commons portraits from
    **`default_list.txt`** (replace that file to change what everyone gets), or paste your own list —
    the placeholder disappears as soon as you click into the box.
-2. **Check inputs** — the tool resolves each line against Commons and shows you what it understood
+2. **Validate files** — the tool resolves each line against Commons and shows you what it understood
    (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged. If a
    previous run's results are on screen, you are asked first — starting a new run clears them. Once
    the list resolves, the blue highlight moves off this button and onto **Score them**, so the next
@@ -120,7 +114,7 @@ https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&check=1
 - **`?list=`** fills the box. Entries are separated by `%0A` (a newline) — **deliberately the only
   separator**: a comma occurs in real Commons file names and `|` occurs in the wikitext form above, so
   those characters must never be treated as delimiters here.
-- **`&check=1`** additionally presses **Check inputs**, so the link lands showing "12 of 12 resolved"
+- **`&check=1`** additionally presses **Validate files**, so the link lands showing "12 of 12 resolved"
   and an armed Score button.
 - Build links with `encodeURIComponent` in your language (`encodeURIComponent('File:A.jpg\nFile:B.jpg')`).
   Percent-encode a literal `+` as `%2B`, or it will arrive as a space.

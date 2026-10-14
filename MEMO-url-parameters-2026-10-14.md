@@ -15,7 +15,7 @@ correction is marked.
 | # | option | value | risk | verdict |
 |---|---|---|---|---|
 | 1 | `?list=<paste text>` (inert prefill) | high — a shareable link for a workshop, an event page, a report | very low — no model calls, no new parser, no server change | **build** |
-| 2 | `?check=1` (presses the existing *Check inputs*) | medium-high — the link lands showing "12 of 12 resolved" and an armed Score button | low — Commons lookups only, 0 model calls; needs an item cap | **build, capped ≤50** |
+| 2 | `?check=1` (presses the existing *Validate files*) | medium-high — the link lands showing "12 of 12 resolved" and an armed Score button | low — Commons lookups only, 0 model calls; needs an item cap | **build, capped ≤50** |
 | 3 | `?fresh=1` (pre-tick the run-fresh box) | low-medium | low | build as a *visible* default only |
 | 4 | `?list=default` alias for `/api/default-list` | low — a short demo link | very low | optional |
 | 5 | `?job=<id>` results deep link | high for sharing | needs durable job storage (jobs are in-memory and wiped on restart, §7.4) | defer |
@@ -31,7 +31,7 @@ also the safest possible rule: the URL layer performs no splitting at all, so
 `wiclient._split_units()` remains the only splitter in the system. `test_render_dom.js` now asserts
 that a piped wikitext value survives verbatim, and the comma case stays one entry.
 
-Guardrails as shipped: a link may prefill and press *Check inputs*, and **never starts a run**; the
+Guardrails as shipped: a link may prefill and press *Validate files*, and **never starts a run**; the
 params are stripped from the address bar with `replaceState` so a reload cannot replay them; over
 ~4,000 characters is refused outright rather than echoed (the pod logs the whole query string, as
 measured in §3); auto-check is capped at 50 entries. All of it is client-side, so the server-side
@@ -176,8 +176,8 @@ function applyUrlParams() {
   const n = text.split("\n").filter(s => s.trim()).length;
   $("input").value = text;                 // paste text, verbatim — commas and all
   $("input").classList.remove("hint-off");
-  setStage("idle");                        // loaded but unchecked: Check inputs is the next step
-  $("parseinfo").textContent = `${n} photo${n === 1 ? "" : "s"} came from the link — press Check inputs`;
+  setStage("idle");                        // loaded but unvalidated: Validate files is the next step
+  $("parseinfo").textContent = `${n} photo${n === 1 ? "" : "s"} came from the link — press Validate files`;
   if (qs.get("fresh") === "1") $("nocache").checked = true;   // visible, reversible, spends nothing
   history.replaceState(null, "", location.pathname);          // a refresh must not re-run anything
   if (qs.get("check") === "1" && n > 0 && n <= URL_LIST_ACTION_MAX) $("check").click();

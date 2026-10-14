@@ -323,12 +323,12 @@ function finish() {
   ok(/2 test photos loaded/.test(doc.getElementById('parseinfo').textContent),
      'the pill reports how many test photos were loaded');
 
-  // ---- 7. the button affordance walks Check inputs -> Score them ---------------------------
+  // ---- 7. the button affordance walks Validate files -> Score them ---------------------------
   // The blue "primary" style is the only thing telling a first-time user which button is next, so it
   // must move with the stage: Check -> (list resolved) -> Score them -> (list edited) -> Check.
   const checkBtn = doc.getElementById('check'), runBtn = doc.getElementById('run');
   ok(checkBtn.classList.contains('primary') && runBtn.disabled,
-     'before checking: Check inputs is primary and Score them is disabled');
+     'before validating: Validate files is primary and Score them is disabled');
   checkBtn.click();
   await new Promise((r) => setTimeout(r, 20));
   // earlier sections rendered job payloads, so a previous run exists and the confirm must appear
@@ -338,13 +338,13 @@ function finish() {
   doc.getElementById('confirm-yes').click();
   await new Promise((r) => setTimeout(r, 40));
   ok(!checkBtn.classList.contains('primary'),
-     'after a successful check the blue leaves Check inputs');
+     'after a successful validation the blue leaves Validate files');
   ok(runBtn.classList.contains('primary') && !runBtn.disabled,
      'after a successful check Score them is primary and enabled');
   doc.getElementById('input').dispatchEvent(new win.Event('input'));
   await new Promise((r) => setTimeout(r, 10));
   ok(checkBtn.classList.contains('primary') && runBtn.disabled,
-     'editing the list puts the flow back to step 1 (Check inputs primary, Score them disabled)');
+     'editing the list puts the flow back to step 1 (Validate files primary, Score them disabled)');
 
   const overlay = doc.getElementById('about-overlay');
   ok(overlay.classList.contains('hidden'), 'the About panel starts hidden');
@@ -368,7 +368,7 @@ function finish() {
 
   // ---- 8. deep links (?list= / ?check=1) --------------------------------------------------
   // A fresh JSDOM per case, because the URL is read once at load. The stub records every fetch so we
-  // can assert the two rules that matter: a link may prefill and (with check=1) press Check inputs,
+  // can assert the two rules that matter: a link may prefill and (with check=1) press Validate files,
   // but it must NEVER cause a run, and it must never split on a comma.
   function withUrl(search) {
     const calls = [];
@@ -425,7 +425,7 @@ function finish() {
 
   const checked = withUrl('?list=' + encodeURIComponent('File:A.jpg\nFile:B.jpg') + '&check=1');
   await new Promise((r) => setTimeout(r, 40));
-  ok(checked.parsed(), '?check=1 presses Check inputs');
+  ok(checked.parsed(), '?check=1 presses Validate files');
   ok(!checked.ran(), '?check=1 still never starts a run');
   ok(checked.win.location.search === '', 'the params are stripped so a reload cannot replay them');
 
