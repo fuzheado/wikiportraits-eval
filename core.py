@@ -27,6 +27,12 @@ MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
 # **Do not raise it further:** 4 streams cost +61% per-call latency for only 2.24x
 # (`research/concurrency-2026-10-14.md`). `INFLIGHT=1` restores the old serial behaviour.
 INFLIGHT = max(1, int(os.environ.get("INFLIGHT", "2")))
+# Stop the run when this many *consecutive* photos fail on a transient gateway 5xx (the model was
+# never reached). This is what makes more than one retry per photo safe: without it, a mid-run outage
+# costs UPSTREAM_MAX_ATTEMPTS requests for *every* remaining photo — the load amplification §13 warns
+# about. With it, a run notices the outage after a handful of photos and stops honestly, the same
+# shape as the 429 stop rule and the pre-flight check. 0 disables the breaker.
+UPSTREAM_ABORT_AFTER = max(0, int(os.environ.get("UPSTREAM_ABORT_AFTER", "5")))
 MAX_INPUT_ITEMS = int(os.environ.get("MAX_INPUT_ITEMS", "200"))  # cap per run (DoS guard)
 EVAL_MAX = int(os.environ.get("EVAL_MAX", "25"))       # per-call cap for POST /api/eval
 PROBE_TTL = float(os.environ.get("PROBE_TTL", "600"))  # reuse a pre-flight answer for 10 min
@@ -311,6 +317,72 @@ def _next_slot() -> float:
     return max(0.0, t - now)
 
 
+def retry_summary(items) -> dict:
+    """How the bounded retry policy actually behaved on this run.
+
+    `recovered` is the number that matters and the reason this exists: it is the only in-repo
+    measurement of whether retrying a transient gateway 5xx was worth it. It is reported on every
+    job (and logged) so the answer accumulates from ordinary runs rather than needing a dedicated
+    load test against a young service. Added 2026-10-14 after the 503 rate was measured (3.5%) but
+    the *recovery* rate could not be — no run had ever exercised the retry path.
+    """
+    attempts = [int(i.get("upstream_attempts") or 1) for i in items]
+    retried = [i for i, n in zip(items, attempts) if n > 1]
+    return {"photos_retried": len(retried),
+            "extra_requests": sum(n - 1 for n in attempts if n > 1),
+            "recovered": sum(1 for i in retried if i.get("status") == "done"),
+            "still_failed": sum(1 for i in retried if i.get("status") != "done")}
+
+
+def _score_item(item, payload, job) -> dict:
+    """One photo's model call, with the whole retry policy. Returns the final response.
+
+    Every attempt — first or retry — is reserved through `_next_slot()`, so a retry is paced like any
+    other call start and the endpoint never sees a retry burst. There is never a loop:
+
+      * `429` — the server said when to come back, so one retry; `Budget` holds the cooldown for
+        every worker, and a second 429 is returned as-is.
+      * `502/503/504` — the gateway could not reach the model ("upstream connect error or
+        disconnect/reset before headers … connection timeout"), so the photo was never processed and
+        nothing was billed. Retried up to `UPSTREAM_MAX_ATTEMPTS` with exponential backoff.
+      * anything else — returned as-is. A 4xx is a client-side fault that retrying cannot fix.
+    """
+    item["status"] = "scoring"
+    item["scoring_started"] = time.time()   # the UI ticks its "waiting for the model" clock
+    attempt = 0
+    rate_limited_retry_used = False
+    while True:
+        delay = _next_slot()
+        if delay > 0:
+            time.sleep(delay)
+        attempt += 1
+        res = wiclient.score_image(payload, BUDGET)
+        code = res.get("http")
+
+        if code == 429 and not rate_limited_retry_used:
+            rate_limited_retry_used = True
+            item["rate_limited"] = True
+            log(job, f"429 — the server said wait {res.get('retry_after')}s; one retry")
+            continue
+
+        if code in wiclient.UPSTREAM_RETRY_CODES and attempt < wiclient.UPSTREAM_MAX_ATTEMPTS:
+            wait = min(wiclient.UPSTREAM_RETRY_BACKOFF * (2 ** (attempt - 1)),
+                       wiclient.UPSTREAM_RETRY_BACKOFF_MAX)
+            log(job, f"HTTP {code} from the gateway — the model was not reached, so nothing was "
+                     f"processed; retrying in {wait:g}s (attempt {attempt + 1} of "
+                     f"{wiclient.UPSTREAM_MAX_ATTEMPTS})"
+                     + (f" — {str(res.get('detail', ''))[:200]}" if res.get("detail") else ""))
+            time.sleep(wait)
+            continue
+        break
+
+    item["upstream_attempts"] = attempt
+    if attempt > 1:
+        item["upstream_retry"] = True
+    item["scoring_s"] = round(time.time() - item["scoring_started"], 2)
+    return res
+
+
 def _endpoint_probe() -> dict:
     """Pre-flight the endpoint once per PROBE_TTL and reuse the verdict for later runs."""
     if time.time() - _PROBE.get("t", 0) < PROBE_TTL and _PROBE.get("result"):
@@ -475,34 +547,11 @@ def run_job(job):
                     out.put(("err", item, payload, None, 0.0))
                     continue
                 out.put(("start", item, payload, sent_px, dt))
-                delay = _next_slot()
-                if delay > 0:
-                    time.sleep(delay)
-                item["status"] = "scoring"
-                item["scoring_started"] = time.time()  # the UI ticks its "waiting for the model" clock
                 item["sent_px"] = sent_px
-                res = wiclient.score_image(payload, BUDGET)
-                # One bounded retry, and only for failures that can be transient:
-                #   429 — the server said when to come back (Retry-After); and
-                #   502/503/504 — the gateway could not reach the model at all ("upstream
-                #     connect error or disconnect/reset before headers … connection
-                #     timeout"), so the photo was never processed.
-                # A 4xx is a client-side fault (malformed body, bad User-Agent) and is never
-                # retried. One retry in total, never a loop: this is a shared, experimental
-                # service (T440223).
-                if res.get("http") == 429:
-                    item["rate_limited"] = True
-                    log(job, f"429 — waiting {res.get('retry_after')}s, then one retry")
-                    res = wiclient.score_image(payload, BUDGET)
-                elif res.get("http") in wiclient.UPSTREAM_RETRY_CODES:
-                    item["upstream_retry"] = True
-                    log(job, f"HTTP {res.get('http')} from the gateway — the model was not "
-                             f"reached, so nothing was processed; retrying once in "
-                             f"{wiclient.UPSTREAM_RETRY_BACKOFF}s "
-                             f"({str(res.get('detail', ''))[:200]})")
-                    time.sleep(wiclient.UPSTREAM_RETRY_BACKOFF)
-                    res = wiclient.score_image(payload, BUDGET)
-                item["scoring_s"] = round(time.time() - item["scoring_started"], 2)
+                # Pacing AND the whole retry policy live in _score_item (see its docstring). Every
+                # attempt goes through _next_slot(), so a retry is paced like any other call start
+                # and can never arrive as a burst — that was the one path that used to bypass the gate.
+                res = _score_item(item, payload, job)
                 out.put(("res", item, res, None, dt))
 
         threads = [threading.Thread(target=scorer, daemon=True) for _ in range(INFLIGHT)]
@@ -512,6 +561,8 @@ def run_job(job):
         # "start" events make the scoring state visible but do not count; "end" (prefetch
         # exhausted) is noted and waited through, never a break — results may still be draining.
         finished = 0
+        consecutive_upstream_failures = 0     # circuit breaker — see UPSTREAM_ABORT_AFTER
+        abort_reason = None
         while finished < len(pending):
             kind, item, payload, sent_px, dt = out.get()
             if kind == "end":
@@ -528,6 +579,7 @@ def run_job(job):
             finished += 1
             res = payload
             if res.get("http") == 200:
+                consecutive_upstream_failures = 0
                 item.update({"status": "done", "resolved": True, "result": res, "from_cache": False})
                 cache_put(item["pageid"], item.get("sha1"),
                           {"result": res, "sent_px": item["sent_px"], "title": item["title"]},
@@ -551,8 +603,27 @@ def run_job(job):
                 # truncated cell once hid the one word that identified a 503 as a connect error
                 log(job, f"{item['title']} — failed: HTTP {code} {res.get('error')}"
                          + (f" — {detail}" if detail else ""))
+                # only the *connection-level* failures count toward the breaker: the model was never
+                # reached, so these are the ones an outage produces en masse.
+                consecutive_upstream_failures = (consecutive_upstream_failures + 1
+                                                 if code in wiclient.UPSTREAM_RETRY_CODES else 0)
             _refresh_derived(job)          # this photo is readable now, not at the end of the run
             _progress(job)
+            if UPSTREAM_ABORT_AFTER and consecutive_upstream_failures >= UPSTREAM_ABORT_AFTER:
+                abort_reason = (f"stopping after {consecutive_upstream_failures} consecutive photos "
+                                f"failed on a transient gateway error — the model was not being "
+                                f"reached, so the rest of the queue is left unscored rather than "
+                                f"retried at the endpoint's expense (UPSTREAM_ABORT_AFTER="
+                                f"{UPSTREAM_ABORT_AFTER})")
+                break
+        if abort_reason:
+            stop.set()                     # stop the prefetch thread and the workers
+            log(job, abort_reason)
+            for it in pending:
+                if it.get("status") not in ("done", "error"):
+                    it.update({"status": "error", "error": abort_reason})
+            finished = len(pending)
+            _refresh_derived(job)
         stop.set()
         scoring_s = round(time.time() - t_pipe, 2)
         job["pipeline"] = {"images": len(pending), "prefetch_depth": PREFETCH,
@@ -563,6 +634,13 @@ def run_job(job):
                                                       + SPACING * max(0, len(pending) - 1), 1),
                            "saved_s": round(fetch_s + score_s + SPACING * max(0, len(pending) - 1)
                                             - scoring_s, 2)}
+        job["retries"] = retry_summary(job["items"])
+        if job["retries"]["photos_retried"]:
+            r = job["retries"]
+            log(job, f"retries: {r['photos_retried']} photo(s) retried for {r['extra_requests']} "
+                     f"extra request(s) — {r['recovered']} recovered, {r['still_failed']} still failed")
+
+    job["retries"] = retry_summary(job["items"])      # zeros for a fully cached run
 
     # the per-photo numbers and the spread are recomputed every time a photo settles, so the list,
     # the ranking and the spread panel are readable long before the last photo finishes.

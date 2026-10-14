@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.16.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.17.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -112,11 +112,16 @@ UI changes.**
 6. **All Wikimedia calls stay server-side.** The browser only calls this app. The one exception is
    the browser hotlinking result thumbnails (a deliberate bandwidth choice). If you add a proxy, mind
    the traffic.
-7. **429 means stop, not retry harder.** One retry after the server's own `retry-after`, then report.
-   No retry loops. `INFLIGHT` workers are allowed within a run (default **1** = serial; v0.5.0
-   shipped 2, reverted in v0.5.1 pending the measurement in §7.1) — but every call start
-   is reserved through `_next_slot()`, so starts stay SPACING apart *globally*: from the endpoint's
-   point of view the app still looks like one well-paced client, and the budget caps the hour.
+7. **A 429 means stop, not retry harder.** One retry after the server's own `retry-after`, then
+   report. No retry loops. **A transient gateway 5xx is a different thing and IS retried more than
+   once** (up to `UPSTREAM_MAX_ATTEMPTS`, exponential backoff) — but only because two guards make it
+   safe: every attempt is reserved through `_next_slot()` so a retry is paced like any other call
+   start, and `UPSTREAM_ABORT_AFTER` stops the whole run once photos fail consecutively, so an outage
+   cannot be multiplied across the queue. `INFLIGHT` workers are allowed within a run (default **2**;
+   v0.5.0 shipped 2, v0.5.1 reverted it pending measurement, v0.16.0 re-enabled it on the evidence in
+   §7.1) — but every call start is reserved through `_next_slot()`, so starts stay SPACING apart
+   *globally*: from the endpoint's point of view the app still looks like one well-paced client, and
+   the budget caps the hour.
 8. **Input is hostile until proven Wikimedia.** Every URL goes through `wiclient._clean_host()`
    (strict fullmatch on a Wikimedia project domain; userinfo/ports/IP literals rejected) and any
    explicit non-http(s) scheme is refused. Fetches only ever target thumbnail URLs returned by a
@@ -333,16 +338,38 @@ so the field is always `None`. Treat `wall_s`/`ttfb_s` as the only timing signal
 anything on `upstream_ms` until a call is seen to populate it. The
 verdict shows in the UI, the run log and the reports.
 
-**A 5xx is retried once; a 4xx never.** The gateway's `503 upstream connect error or disconnect/
-reset before headers … connection timeout` means the model was never reached, so the photo was not
-processed and one retry (2 s backoff, logged, one attempt only) recovers most of them — the app
-otherwise loses the photo outright, which is what a real 503 did on 2026-10-14. **Measured
-2026-10-14: ~3.5 % of first attempts (4 of ~116) came back 503**, every one of them in a serial
-phase — small n, but enough to treat the retry as load-bearing rather than a rare edge, and worth
-handing to T440223. `429` keeps its own
-single retry driven by the server's `Retry-After`, and a `4xx` (malformed body, bad User-Agent) is a
-client-side fault that retrying cannot fix. `UPSTREAM_RETRY_CODES` / `UPSTREAM_RETRY_BACKOFF` in
-`wiclient.py`; `test_pipeline.py` asserts one retry, no loop, and no retry on a 400.
+**A transient gateway 5xx is retried; a 4xx never.** The gateway's `503 upstream connect error or
+disconnect/reset before headers … connection timeout` means the model was *never reached*, so the
+photo was not processed and **nothing was billed** — a failed attempt costs no tokens. **Measured
+2026-10-14: ~3.5 % of first attempts (4 of ~116) came back 503**, every one of them in a serial phase,
+which is why the retry is load-bearing rather than a rare edge, and worth handing to T440223.
+
+Policy (v0.17.0): up to `UPSTREAM_MAX_ATTEMPTS` (default **3**, i.e. two retries) with exponential
+backoff `UPSTREAM_RETRY_BACKOFF` → `UPSTREAM_RETRY_BACKOFF_MAX` (2 s → 4 s, capped at 8 s). Three
+properties matter more than the count:
+
+- **Every attempt is paced.** `_score_item()` reserves each attempt through `_next_slot()`, so a
+  retry cannot arrive as a burst. (Before v0.17.0 the retry path *bypassed* `_next_slot()` — it was
+  the one place a request was issued outside the global gate.)
+- **The marginal load is bounded by the failure rate, not the queue.** Extra requests ≈
+  (failure rate × extra attempts) ≈ +7 % in the worst case, not +200 %.
+- **`UPSTREAM_ABORT_AFTER` (default 5) stops the run** once that many *consecutive* photos fail on a
+  connection-level error. This is what makes more than one retry defensible at all: without it a
+  mid-run outage would cost 3 requests for *every* remaining photo. Measured in `test_pipeline.py`:
+  an outage across 12 photos stops after **15 calls** instead of 36. `0` disables the breaker.
+
+`429` keeps its own single retry driven by the server's `Retry-After` (never more), and a `4xx`
+(malformed body, bad User-Agent) is a client-side fault that retrying cannot fix.
+
+**The recovery rate is NOT measured, and that is deliberate.** No probe has ever exercised the retry
+path, and buying a real estimate would mean thousands of calls at a service §13 says not to
+load-test. So instead every run now reports `job["retries"]` — `photos_retried`, `extra_requests`,
+`recovered`, `still_failed` (`core.retry_summary()`) — and logs a `retries:` line. Ordinary use
+answers "was the second attempt worth it?" within a few runs; **if `recovered` stays at 0, put
+`UPSTREAM_MAX_ATTEMPTS` back to 2.** `UPSTREAM_RETRY_CODES` / `UPSTREAM_RETRY_BACKOFF` /
+`UPSTREAM_MAX_ATTEMPTS` / `UPSTREAM_RETRY_BACKOFF_MAX` in `wiclient.py`; `UPSTREAM_ABORT_AFTER` in
+`core.py`. `test_pipeline.py` asserts the bounded retry, the exponential backoff, no retry on a 400,
+no loop, and that the breaker bounds an outage.
 
 **Before "fixing" a slow run: run `probe_latency_now.py` (4 calls) and check whether text-only is
 also slow.** If it is, the app is innocent — record the number and move on. Do not add retries or
@@ -861,7 +888,9 @@ exists.
    during a bad hour is still exactly what this rule forbids.
 3. Hand the measurement to the ML team on **T440223** (dated, with text-only vs image split, and the
    HTTP status). **Hand it over, do not post it** — this agent's default for Phabricator is
-   read-only, and a Wikimedia account holder should file or comment in their own name.
+   read-only, and a Wikimedia account holder should file or comment in their own name. A
+   ready-to-paste comment carrying the transient-503 numbers, the small-sample interval and the
+   questions they raise is **`MEMO-t440223-503-note-draft-2026-10-14.md`**.
 4. Only then consider whether §7's probe-and-trend cron is worth building, since that is what makes
    step 3 cheap and routine.
 

@@ -274,7 +274,11 @@ reports 960 as its width), `SPACING` (0.9 s between call *starts*, global across
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
 `PROBE_TTL` (600 s, how long a pre-flight verdict is reused), `CACHE_DIR` (`./cache`),
-`BASELINE_WARM_S` (0.54), `WIKIMEDIA_USER_AGENT` (please set your own contact URL if you deploy
+`BASELINE_WARM_S` (0.54), `UPSTREAM_MAX_ATTEMPTS` (3 — attempts per photo before it is reported as
+failed; only reached on a transient gateway 5xx), `UPSTREAM_RETRY_BACKOFF` (2 s, doubling) /
+`UPSTREAM_RETRY_BACKOFF_MAX` (8 s), `UPSTREAM_ABORT_AFTER` (5 — consecutive photos failing on a
+connection-level error stop the run, so an outage cannot be multiplied across the queue; `0` disables),
+`WIKIMEDIA_USER_AGENT` (please set your own contact URL if you deploy
 this).
 
 ### Deploying to Toolforge
@@ -310,10 +314,11 @@ Which limit applies depends entirely on **where the app runs**, and the two case
 So the 100 calls/hour cap in this app is **self-imposed**, not imposed: on the deployment no external
 quota requires it. It stays because being a good neighbour to a brand-new service (§13 of
 `HANDOFF.md`) matters more than speed here, and because a public tool with no login should not be
-usable as a load generator pointed at the endpoint. Either way the app scores one photo at a time
-with a small gap between calls, stops when the server says 429, and caches every answer by
-`(wiki, pageid, sha1, schema, width)` — re-scoring a photo you have already scored costs nothing, and
-re-uploading a file invalidates its cache entry automatically.
+usable as a load generator pointed at the endpoint. Either way the app keeps call *starts* a fixed gap
+apart, stops when the server says 429, is bounded to `UPSTREAM_MAX_ATTEMPTS` attempts on a transient
+gateway error and stops the run outright after `UPSTREAM_ABORT_AFTER` consecutive ones, and caches
+every answer by `(wiki, pageid, sha1, schema, width)` — re-scoring a photo you have already scored
+costs nothing, and re-uploading a file invalidates its cache entry automatically.
 
 ## Reports
 
@@ -393,8 +398,10 @@ hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
   numbers, and the queue of improvements.
 - **`MEMO-*.md`** — a finished investigation with options and a recommendation, written for a
   specific reader: `MEMO-url-parameters-2026-10-14.md` (the `?list=` design, including what was
-  deliberately refused) and `MEMO-toolforge-skills-2026-10-14.md` (corrections for the Toolforge
-  skill docs upstream). **Where an idea goes:** a feature belongs in `PRD.md` (requirements §5,
+  deliberately refused), `MEMO-toolforge-skills-2026-10-14.md` (corrections for the Toolforge
+  skill docs upstream) and `MEMO-t440223-503-note-draft-2026-10-14.md` (a ready-to-paste comment for
+  the ML team about the transient 503 rate — hand over, do not post). **Where an idea goes:** a
+  feature belongs in `PRD.md` (requirements §5,
   roadmap §13, decisions §9), the next thing to do in `HANDOFF.md` §7.
 - **`research/`** — the question-design pilot (2026-10-13): write-up, raw answers, chart, plus a dated
   copy of the Wikitech rate-limit and benchmark sections. Read this before changing any question

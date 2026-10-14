@@ -77,7 +77,7 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F8 | Reports in Markdown, JSON, CSV, PDF — downloadable mid-run, each showing the photo next to its evaluations | shipped |
 | F9 | About panel: verbatim prompt, question legend, answer semantics, limits, data flow, provenance | shipped |
 | F10 | Latency verdict per run (`normal`/`elevated`/`service-side`) against a measured baseline | shipped |
-| F11 | Budget/rate-limit display and stop-on-429 behaviour with a single retry | shipped |
+| F11 | Budget/rate-limit display and stop-on-429 behaviour with a single retry; and a bounded, paced retry (default 3 attempts, exponential backoff) on a transient gateway 5xx, with a run-level circuit breaker after 5 consecutive failures | shipped |
 | F12 | Paste a `Category:` name and score its members | **not shipped** (see roadmap) |
 | F13 | Persist runs and compare two runs (deltas per photo) | **not shipped** |
 | F14 | Calibrated threshold derived from labelled data | **not shipped** (0.5 today is a reporting convenience) |
@@ -227,7 +227,8 @@ Downloads for later photos run in a background thread while the model answers fo
 |---|---|---|
 | Endpoint latency or availability (platform is "experimental", no SLA) | Runs take minutes instead of seconds | Per-run latency verdict against a measured baseline; time-to-first-byte captured; results cached; the finding is reported rather than hidden |
 | Model calibration unknown | A "0.65" may be read as ground truth | Ranking language throughout; ≥0.5 reported as a count, not a verdict; About panel states the limits |
-| Quota exhaustion (100/h anonymous) | Runs stall with 429s | Spacing, one call at a time, single retry, visible budget; deploy to WMCS for the higher tier |
+| Quota exhaustion (100/h anonymous) | Runs stall with 429s | Spacing, paced call starts, a single retry on 429, visible budget; deploy to WMCS for the higher tier |
+| Transient gateway 5xx (~3.5% of first attempts, measured 2026-10-14) | A photo silently drops out of the run | Up to 3 paced attempts with exponential backoff, and the run stops after 5 consecutive failures so an outage is not multiplied across the queue; every run reports `retries` so the recovery rate becomes measurable |
 | Cache staleness after a file is overwritten | A stale answer shown | Cache key includes the file's SHA-1, which changes on re-upload |
 | Question wording drift | Numbers become incomparable between runs | Schema hash in the cache key; About panel generated from the live constants; contract test diffs it |
 | A rewrite that *looks* better ranks worse | Users distrust the tool, or we ship a regression | Measured, not assumed: five wordings were benchmarked on fixed photos (0.486 → 0.021 candidate range) and the "improvements" were rejected; candidate spread is now the tracked metric |

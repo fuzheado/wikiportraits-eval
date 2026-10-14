@@ -8,7 +8,7 @@ import urllib.error, urllib.parse, urllib.request
 # The app version lives here rather than in core.py because both need it: core reports it (About,
 # reports) and this module puts it in the default User-Agent. One source of truth — before this, the
 # UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
-APP_VERSION = "0.16.0"
+APP_VERSION = "0.17.0"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
     f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")
@@ -24,11 +24,22 @@ MODEL_MAX_WIDTH = 640        # the vision encoder normalises to this width, what
 THUMB_WIDTH = int(os.environ.get("THUMB_WIDTH", "960"))   # must be a THUMB_LADDER step
 SPACING = float(os.environ.get("SPACING", "0.9"))          # seconds between scoring calls
 # A 5xx from the gateway that failed *before headers* — Envoy's "upstream connect error or
-# disconnect/reset before headers … connection timeout" — means the model was never reached, so one
+# disconnect/reset before headers … connection timeout" — means the model was never reached, so a
 # retry is worth it. A 4xx is a client-side fault (400 malformed body, 403 missing User-Agent) and
-# retrying cannot fix it. One retry in total, never a loop: this is a shared, experimental service.
+# retrying cannot fix it. Never a loop: this is a shared, experimental service.
+#
+# **How many retries, measured 2026-10-14:** ~3.5% of first attempts (4 of ~116) returned one of
+# these — a connection-level fault in which the model was never reached, so the failed attempt costs
+# no tokens. `UPSTREAM_MAX_ATTEMPTS = 3` is therefore a small, bounded bet, and the *marginal* load is
+# tiny by construction: extra requests ≈ (failure rate × extra attempts), so the worst case is about
+# +7% requests, not +200%. What is NOT measured is the recovery rate — no probe has yet exercised
+# this path — which is exactly why every run now reports `retries` (see `core.retry_summary`):
+# ordinary use answers "was the second attempt worth it?" without a dedicated load test. Backoff is
+# exponential (2 s, 4 s, …) and every attempt is paced through `_next_slot()` like any other call.
 UPSTREAM_RETRY_CODES = (502, 503, 504)
 UPSTREAM_RETRY_BACKOFF = float(os.environ.get("UPSTREAM_RETRY_BACKOFF", "2.0"))
+UPSTREAM_RETRY_BACKOFF_MAX = float(os.environ.get("UPSTREAM_RETRY_BACKOFF_MAX", "8.0"))
+UPSTREAM_MAX_ATTEMPTS = max(1, int(os.environ.get("UPSTREAM_MAX_ATTEMPTS", "3")))
 
 STATE = ("WikiPortraits photograph of a public figure, taken by a volunteer photographer at an "
          "event photo booth. Assess the photograph itself, not the person's fame.")

@@ -243,9 +243,11 @@ if cold["status"] != "done":
 if not any("not in cache" in line for line in cold["log"]):
     failures.append("a cold replay does not say why nothing was scored")
 
-# --- one bounded retry on a transient upstream failure ----------------------------------------
-# A 503 from the gateway means the model was never reached, so one retry is worth it. A 400 is a
-# client-side fault and must never be retried; and neither case may loop.
+# --- retries on a transient upstream failure -------------------------------------------------
+# A 502/503/504 from the gateway means the model was never reached, so a retry costs no tokens. The
+# policy is bounded (UPSTREAM_MAX_ATTEMPTS) and every attempt is paced through _next_slot(). A 400 is
+# a client-side fault and must never be retried; neither case may loop; and a sustained outage must
+# trip the breaker rather than multiply attempts across the whole queue.
 import contextlib
 
 
@@ -299,33 +301,47 @@ gw_400 = {"http": 400, "wall_s": 0.05, "error": "request failed",
           "detail": '{"error":"Image at index 0 is not valid base64"}'}
 
 real_backoff = wiclient.UPSTREAM_RETRY_BACKOFF
+real_backoff_max = wiclient.UPSTREAM_RETRY_BACKOFF_MAX
+real_max_attempts = wiclient.UPSTREAM_MAX_ATTEMPTS
+real_abort = core.UPSTREAM_ABORT_AFTER
 wiclient.UPSTREAM_RETRY_BACKOFF = 0.01          # keep the suite fast
+wiclient.UPSTREAM_RETRY_BACKOFF_MAX = 0.01
+wiclient.UPSTREAM_MAX_ATTEMPTS = 3              # pin both: an env override must not change the test
+core.UPSTREAM_ABORT_AFTER = 5
 try:
     with fresh_cache():                          # 503 once, then 200
         fake1, st1 = scripted([gw_503, ok_payload()])
         wiclient.score_image = fake1
         j1 = run_one()
     if st1["n"] != 2:
-        failures.append(f"a transient 503 should be retried exactly once (made {st1['n']} calls)")
+        failures.append(f"a transient 503 should be retried (made {st1['n']} calls)")
     if j1["items"][0]["status"] != "done":
         failures.append(f"the retried photo should end up scored: {j1['items'][0].get('error')}")
-    if not j1["items"][0].get("upstream_retry"):
-        failures.append("the retry is not recorded on the item")
-    if not any("retrying once" in line for line in j1["log"]):
+    if not j1["items"][0].get("upstream_retry") or j1["items"][0].get("upstream_attempts") != 2:
+        failures.append(f"the retry should be recorded with its attempt count: "
+                        f"{j1['items'][0].get('upstream_attempts')!r}")
+    if not any("retrying in" in line for line in j1["log"]):
         failures.append("the retry does not appear in the run log")
+    if (j1.get("retries") or {}).get("recovered") != 1:
+        failures.append(f"the run should report the retry as recovered: {j1.get('retries')}")
+    if not any("retries:" in line for line in j1["log"]):
+        failures.append("the run log should summarise the retries")
 
     with fresh_cache():                          # 503 every time
         fake2, st2 = scripted([gw_503])
         wiclient.score_image = fake2
         j2 = run_one()
-    if st2["n"] != 2:
-        failures.append(f"a persistent 503 must stop after ONE retry (made {st2['n']} calls)")
+    if st2["n"] != 3:
+        failures.append(f"a persistent 503 must stop after UPSTREAM_MAX_ATTEMPTS=3 "
+                        f"(made {st2['n']} calls)")
     if j2["items"][0]["status"] != "error":
-        failures.append("a twice-failed photo should be an error")
+        failures.append("a photo that fails every attempt should be an error")
     if "503" not in (j2["items"][0].get("error") or ""):
         failures.append(f"the item error should name the HTTP status: {j2['items'][0].get('error')!r}")
     if not any("connection timeout" in line for line in j2["log"]):
         failures.append("the full gateway body should reach the run log, not just the row")
+    if (j2.get("retries") or {}).get("still_failed") != 1:
+        failures.append(f"the run should report the retry as NOT recovered: {j2.get('retries')}")
 
     with fresh_cache():                          # a client-side fault: never retried
         fake3, st3 = scripted([gw_400])
@@ -335,8 +351,29 @@ try:
         failures.append(f"a 400 must NOT be retried (made {st3['n']} calls)")
     if j3["items"][0]["status"] != "error":
         failures.append("a 400 should still be reported as an error")
+
+    # the circuit breaker: a mid-run outage must not cost MAX_ATTEMPTS x every remaining photo
+    NFAN = 12
+    with fresh_cache():
+        fake4, st4 = scripted([gw_503])
+        wiclient.score_image = fake4
+        j4 = core.new_job("\n".join(f"File:Outage {n}.jpg" for n in range(1, NFAN + 1)))
+        core.run_job(j4)
+    if not any("stopping after" in line for line in j4["log"]):
+        failures.append("a sustained outage should stop the run, not grind through the queue")
+    left = [i for i in j4["items"] if "stopping after" in (i.get("error") or "")]
+    if not left:
+        failures.append("the abort should leave the remaining photos marked, not silently dropped")
+    floor = core.UPSTREAM_ABORT_AFTER * 3        # 5 consecutive photos x 3 attempts
+    ceil = NFAN * 3                              # what it would cost without the breaker
+    if not (floor <= st4["n"] < ceil):
+        failures.append(f"the breaker did not bound the outage: {st4['n']} calls "
+                        f"(expected {floor}..{ceil - 1} for {NFAN} photos)")
 finally:
     wiclient.UPSTREAM_RETRY_BACKOFF = real_backoff
+    wiclient.UPSTREAM_RETRY_BACKOFF_MAX = real_backoff_max
+    wiclient.UPSTREAM_MAX_ATTEMPTS = real_max_attempts
+    core.UPSTREAM_ABORT_AFTER = real_abort
     wiclient.score_image = fake_score
 
 # --- the cache-only GET: the API twin of a share link, and why it is safe to hand out --------
@@ -373,8 +410,8 @@ if core.route("GET", "/api/eval", b"", "")[0] != 400:
     failures.append("GET /api/eval with no list should be a 400")
 
 print(f"cache-only GET    : warm -> from_cache, cold -> uncached, {model_calls() - before} model calls total")
-print(f"retry             : 503 then 200 -> {st1['n']} calls (scored); 503 twice -> {st2['n']} calls "
-      f"(error); 400 -> {st3['n']} call (no retry)")
+print(f"retry             : 503 then 200 -> {st1['n']} calls (scored); 503 always -> {st2['n']} calls "
+      f"(error); 400 -> {st3['n']} call (no retry); outage of {NFAN} photos -> {st4['n']} calls (breaker)")
 print(f"cache             : repeat run {n_cached}/{N} cached with {spent_repeat} calls; "
       f"no_cache re-scored all {N} ({spent_fresh} calls) in {fresh.get('elapsed_s')}s")
 print(f"replay            : warm {spent_warm} calls, all from cache; cold {spent_cold} calls, all marked uncached")
