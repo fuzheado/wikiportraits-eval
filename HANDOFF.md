@@ -292,8 +292,15 @@ and a public tool should not be the thing that load-tests it.
   2. **`start` is a no-op while a webservice is already running** — it answers "Your job is already
      running" and keeps serving the *old* image. Hence `stop` first: a `start` without a preceding
      `stop` silently deploys nothing.
-  3. Use `sudo -niu tools.wikiportraits-eval <cmd>` over SSH, never `become` (the skill's trap: chained
-     commands after `become` run in the *original* user's shell).
+  3. Use `sudo -niu tools.wikiportraits-eval <cmd>` over SSH, never `become`. This is *already* the
+     upstream advice (`wikimedia-toolforge` §Common Mistakes and its nested-shells section) and it is
+     **verified here on 2026-10-14**: `become wikiportraits-eval; id` prints `uid=3522(alih)` — the
+     chained command never becomes the tool user — while `sudo -niu tools.wikiportraits-eval id`
+     prints `uid=58240(tools.wikiportraits-eval)`. **But the same skill collection contradicts
+     itself:** `ssh login.toolforge.org "become my-build-tool; toolforge build start …"` is given as
+     the recipe in `wikimedia-toolforge`'s Build Service section and in `toolforge-python` /
+     `toolforge-nodejs`; followed literally it builds as the wrong account. Ignore those, use
+     `sudo -niu`. (Reported as a skill-repo defect, not fixed there yet — see §9.)
 
   **Proof that the new image is serving:** `APP_VERSION` in `/api/about` (bump it for every deploy —
   `uptime_s` alone cannot distinguish a fresh pod from a fresh image). The `--mount=none` deploy also
@@ -416,6 +423,15 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
   probability per option in one forward pass, with no generated text — which is what §4 and the
   About panel quote. See §13. **Read-only:** do not comment, file, assign or re-prioritise on the
   owner's behalf (that is this agent's default for Phabricator generally).
+- **Toolforge deploy knowledge — what is upstream and what is only here** (checked 2026-10-14 by
+  reading the Wikipedia-AI-Skills repo):
+  - **Upstream and correct:** the `become` vs `sudo -niu` rule (`wikimedia-toolforge`), which is also
+    the most common way to waste an hour on Toolforge. Verified empirically (§6).
+  - **Upstream but self-contradicting:** that same repo's Build Service recipes use
+    `ssh … "become <tool>; toolforge build start …"` — the exact pattern its own warning forbids.
+    Also present in `toolforge-python` and `toolforge-nodejs`. Worth a PR upstream.
+  - **Not upstream at all** (absent on 2026-10-14): `--buildservice-image` wanting `namespace/name`,
+    and `start` being a no-op while a webservice already runs. Both are only in §6 here.
 - **Wikitech:** `Machine_Learning/LiftWing/Large_Language_Models` — the model list (clef-flash is
   under "Task Specific models"), caps, the rate-limit tiers, the one published benchmark, and the
   "experimental, no SLA" caveat. **It changed on 2026-10-13 05:12 UTC**, hours before the slowdown
