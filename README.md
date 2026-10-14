@@ -53,9 +53,11 @@ with the model's exact questions shown to you.
 
 ## Using it
 
-1. **Paste your list** — one photo per line, in almost any form (see below). The box starts with
-   an example list from **`default_list.txt`** (12 real Commons portraits) — replace that file, or
-   just paste over it, to try your own.
+1. **Paste your list** — one photo per line, in almost any form (see below). The box starts **empty**
+   with the accepted formats shown as a grey placeholder, so there is nothing runnable in it by
+   accident. Press **Load test data** to fill it with the 12 real Commons portraits from
+   **`default_list.txt`** (replace that file to change what everyone gets), or paste your own list —
+   the placeholder disappears as soon as you click into the box.
 2. **Check inputs** — the tool resolves each line against Commons and shows you what it understood
    (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged. If a
    previous run's results are on screen, you are asked first — starting a new run clears them.
@@ -285,10 +287,11 @@ hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
 
 ## Project documents
 
-- **`default_list.txt`** — the example list the page starts with (12 real Commons portraits, one
-  `File:` title per line). **Replace this file** to change the default for everyone: it is read at
-  request time, so it needs no code change. No comment lines in it — a `#` is part of a Commons
-  filename, and the parser would treat your comment as a photo name.
+- **`default_list.txt`** — the example list behind the **Load test data** button (12 real Commons
+  portraits, one `File:` title per line). **Replace this file** to change the default for everyone: it
+  is read at request time, so it needs no code change. It is never pre-loaded into the box — the page
+  starts empty and the list arrives only when someone asks for it. No comment lines in it — a `#` is
+  part of a Commons filename, and the parser would treat your comment as a photo name.
 - **`PRD.md`** — what this is for, requirements, architecture, decisions (including rejected
   alternatives and what would reopen them), risks, roadmap.
 - **`HANDOFF.md`** — for whoever maintains or extends this next: invariants, traps, measured

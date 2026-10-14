@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.6.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.7.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -16,7 +16,7 @@ App version 0.6.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 a
 | `wiclient.py` | input parsing → `File:` titles, per-wiki Commons API resolution, thumbnail fetch, model call, budget/pacing |
 | `reports.py`, `pdfmin.py` | Markdown/JSON/CSV/PDF output; `pdfmin.py` is a dependency-free PDF writer |
 | `static/index.html` | the whole UI: incremental list rendering, per-row clock, latency panel, About modal |
-| `default_list.txt` | the example list the page starts with — 12 real Commons photos, one `File:` title per line. Served by `/api/default-list`, read at request time, so **replacing the file changes the default for everyone** with no code change. No comment lines: `#` is part of a Commons filename and the parser would treat a comment as a photo name (`test_default_list.py` enforces this). |
+| `default_list.txt` | the example list behind the UI's **Load test data** button — 12 real Commons photos, one `File:` title per line. Served by `/api/default-list`, read at request time, so **replacing the file changes the default for everyone** with no code change. Never pre-loaded into the box (invariant 12). No comment lines: `#` is part of a Commons filename and the parser would treat a comment as a photo name (`test_default_list.py` enforces this). |
 | `.githooks/pre-commit` | offline suites on every commit, plus `test_default_list.py --live` **only when `default_list.txt` is staged**. Enable per clone: `git config core.hooksPath .githooks`. Escape hatches: `SKIP_LIVE=1`, `SKIP_HOOKS=1`. |
 | `.github/workflows/checks.yml` | CI: the offline suites on Python 3.9 **and** 3.12 (3.9 is the advertised floor), the jsdom DOM test, and a **manual-only** job that verifies the starter list on Commons (1 API call, 0 model calls). |
 | `app.py` / `wsgi.py` | `http.server` backend / WSGI entry point for Toolforge's traditional backend |
@@ -127,6 +127,14 @@ UI changes.**
     format, embed from `thumb_bytes(item)` (saved copy first, Commons as fallback) rather than
     hotlinking. Also: draw the hairline frame around every embedded image — a white-on-transparent
     logo is otherwise invisible on white paper and the reader cannot tell an image was embedded.
+12. **The image box must never arrive pre-filled.** It starts empty, with the accepted formats shown
+    only as a grey `placeholder`, and the real starter list arrives on demand from the **Load test
+    data** button. A placeholder is not a value: that is what stops anyone pressing *Score them* on
+    example text and spending real calls on `Foo.jpg`. Clicking into the box blanks the hint
+    (`#input.hint-off::placeholder`), so the user always faces an empty box. `test_render_dom.js`
+    asserts the box is empty at load and that the button fills it — this one is a requirement rather
+    than a past incident, and it lives here because a pre-filled box is exactly how it would bite us
+    next time.
 
 ## 4. Traps, measured
 

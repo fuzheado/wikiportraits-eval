@@ -52,6 +52,9 @@ const dom = new JSDOM(html, {
         if (u.includes('/api/config')) {
           return { model: 'llm-clef-flash', thumb_width_requested: 640, spacing_s: 0.9, budget: {}, questions: {} };
         }
+        if (u.includes('/api/default-list')) {
+          return { text: 'File:Example A.jpg\nFile:Example B.jpg', count: 2, source: 'default_list.txt' };
+        }
         return { items: [], warnings: [], n: 0 };
       },
     });
@@ -214,6 +217,21 @@ function finish() {
 }
 
 (async () => {
+  // ---- 6. the input box is never pre-loaded with something runnable -----------------------
+  // The example formats live in the placeholder (grey, not content); the real starter list arrives
+  // only when the user asks for it. This is the assertion that keeps "press Score them" from ever
+  // scoring the examples by accident.
+  const inputEl = doc.getElementById('input');
+  ok(inputEl.value === '', 'the input box starts empty — the examples are a placeholder, not content');
+  ok((inputEl.getAttribute('placeholder') || '').indexOf('Foo.jpg') !== -1,
+     'the placeholder shows the example formats');
+  doc.getElementById('load-test').click();
+  await new Promise((r) => setTimeout(r, 30));
+  ok(inputEl.value.split('\n').filter((s) => s.trim()).length === 2,
+     `Load test data fills the box from /api/default-list (got ${inputEl.value.split('\n').length} line(s))`);
+  ok(/2 test photos loaded/.test(doc.getElementById('parseinfo').textContent),
+     'the pill reports how many test photos were loaded');
+
   const overlay = doc.getElementById('about-overlay');
   ok(overlay.classList.contains('hidden'), 'the About panel starts hidden');
   doc.getElementById('about-open').click();

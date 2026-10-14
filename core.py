@@ -532,7 +532,7 @@ def run_job(job):
 
 
 # ------------------------------------------------------------------- about
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.7.0"
 MODEL_CARD = "https://huggingface.co/Cloudflare/clef-flash"
 WIKITECH_PAGE = "https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models"
 

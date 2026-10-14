@@ -32,6 +32,10 @@
   .bar{height:12px;background:var(--bar);border-radius:999px;overflow:hidden}
   .bar > span{display:block;height:100%;background:var(--blue);width:0;transition:width .3s}
   .meter{font-size:12px;color:var(--muted)}
+  /* the box starts empty: the examples are a grey hint, never content, so nothing in it can be run
+     by accident. Clicking in blanks the hint entirely (see the focus/blur handlers). */
+  #input::placeholder{color:#9aa7b6;opacity:1}
+  #input.hint-off::placeholder{color:transparent}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
   th{color:var(--muted);font-weight:600}
@@ -152,8 +156,10 @@
     <label>One per line — filenames, <code>File:</code> titles, Commons/upload/thumb URLs or
       wikitext, mixed freely <span class="meter">(full rules &amp; accepted formats: <b>About</b>,
       section 2)</span></label>
-    <textarea id="input" spellcheck="false" placeholder="one image per line — the example list loads in a moment"></textarea>
+    <textarea id="input" spellcheck="false"
+      placeholder="Foo.jpg&#10;File:Foo.jpg&#10;https://commons.wikimedia.org/wiki/File:Foo.jpg&#10;https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg&#10;&#10;example formats only — this is a hint, not a list. Paste your own, or press “Load test data” for 12 real Commons photos."></textarea>
     <div class="row" style="margin-top:10px">
+      <button id="load-test" title="Load the 12 example photos from default_list.txt so you can try a real run">Load test data</button>
       <button id="check" class="primary">Check inputs</button>
       <button id="run" disabled>Score them</button>
       <label class="meter" id="nocache-label" style="display:flex;align-items:center;gap:6px"
@@ -713,12 +719,28 @@ fetch("/api/config").then(r => r.json()).then(c => {
 }).catch(() => {});
 
 // The starter list lives in default_list.txt at the repo root, so it can be swapped for a real
-// event's file list without touching code. Fill the box once, never over anything already typed.
-fetch("/api/default-list").then(r => r.json()).then(d => {
-  if (d && typeof d.text === "string" && d.text.trim() && !$("input").value.trim()) {
+// event's file list without touching code. It is loaded **on demand**: the box starts empty with only
+// a grey example in the placeholder, so there is never anything runnable in it by accident.
+$("load-test").onclick = async () => {
+  $("load-test").disabled = true;
+  $("parseinfo").textContent = "loading the test list…";
+  try {
+    const r = await fetch("/api/default-list");
+    const d = await r.json();
+    if (!d || typeof d.text !== "string" || !d.text.trim()) throw new Error("empty list");
     $("input").value = d.text;
+    $("input").classList.remove("hint-off");
+    $("parseinfo").textContent = `${d.count || 0} test photos loaded — press Check inputs`;
+  } catch (e) {
+    $("parseinfo").textContent = "could not load the test list — paste your own list instead";
+  } finally {
+    $("load-test").disabled = false;
   }
-}).catch(() => {});
+};
+
+// the grey example is a hint, not content: clicking in must present an empty box to type into
+$("input").addEventListener("focus", () => $("input").classList.add("hint-off"));
+$("input").addEventListener("blur", () => { if (!$("input").value) $("input").classList.remove("hint-off"); });
 </script>
 </body>
 </html>
