@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.8.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.9.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -16,6 +16,7 @@ App version 0.8.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 a
 | `wiclient.py` | input parsing → `File:` titles, per-wiki Commons API resolution, thumbnail fetch, model call, budget/pacing |
 | `reports.py`, `pdfmin.py` | Markdown/JSON/CSV/PDF output; `pdfmin.py` is a dependency-free PDF writer |
 | `static/index.html` | the whole UI: incremental list rendering, per-row clock, latency panel, About modal |
+| | *Deep links:* `?list=` (newline-separated paste text, `%0A`) prefills; `&check=1` also presses Check inputs, capped at 50 entries; over ~4,000 chars is refused. Never starts a run; params are stripped via `replaceState` so a reload cannot replay them. Caps are client-side only because the server caps independently (`PARSE_MAX`, `MAX_INPUT_ITEMS`) and never sees the query string. |
 | | *UI state to keep:* `setStage(idle|checked|running|done)` owns which button is blue and whether **Score them** is enabled — the blue highlight is the only thing telling a first-time user which step is next, and editing the list must send the flow back to `idle`. `test_render_dom.js` asserts the whole cycle. The input box must start empty (invariant 12). |
 | `default_list.txt` | the example list behind the UI's **Load test data** button — 12 real Commons photos, one `File:` title per line. Served by `/api/default-list`, read at request time, so **replacing the file changes the default for everyone** with no code change. Never pre-loaded into the box (invariant 12). No comment lines: `#` is part of a Commons filename and the parser would treat a comment as a photo name (`test_default_list.py` enforces this). |
 | `.githooks/pre-commit` | offline suites on every commit, plus `test_default_list.py --live` **only when `default_list.txt` is staged**. Enable per clone: `git config core.hooksPath .githooks`. Escape hatches: `SKIP_LIVE=1`, `SKIP_HOOKS=1`. |
@@ -136,6 +137,13 @@ UI changes.**
     asserts the box is empty at load and that the button fills it — this one is a requirement rather
     than a past incident, and it lives here because a pre-filled box is exactly how it would bite us
     next time.
+    **One explicit exception:** a URL carrying `?list=` may prefill (see §1 and the memo below). That
+    does not violate the purpose — nothing appears unbidden, and a link may press *Check inputs* but
+    **must never start a run** (scoring spends a call per photo, so it always takes a click). The URL
+    layer must also not grow a second splitter: `?list=` is newline-separated only, because a comma
+    occurs in real file names and `|` occurs in the wikitext form the app advertises.
+    `test_ui_contract.py` asserts `split(",")` appears nowhere in the page script and that the
+    deep-link code calls `$("check").click()` and never `$("run").click()`.
 
 ## 4. Traps, measured
 

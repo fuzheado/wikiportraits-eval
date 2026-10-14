@@ -511,10 +511,15 @@ function renderJob(job) {
       + (L.verdict === "normal" ? "" : `<br>${esc(L.note || "")}`);
   }
   const fresh = doneItems.filter(i => !i.from_cache).length;
+  // always say how much of this run actually spent a call — "how much am I using" is a fair
+  // question to be able to answer without opening the About panel
   $("freshness").innerHTML = job.no_cache
     ? `<span class="warn">cache bypassed — scoring fresh</span> · ${fresh} of ${doneItems.length}`
       + ` finished photo${doneItems.length === 1 ? "" : "s"} cost a model call`
-    : "";
+    : (doneItems.length
+        ? `${fresh} of ${doneItems.length} finished photo${doneItems.length === 1 ? "" : "s"}`
+          + ` cost a model call; the rest came from cache`
+        : "");
   // incremental list: rows are created once and patched in place, so the thumbnails never reload.
   // Done photos are ordered by the composite (rank shown), anything still running keeps its place
   // below them.
@@ -717,7 +722,12 @@ $("check").onclick = async () => {
     $("parsedsummary").textContent = `resolved inputs — ${ok} of ${(d.items || []).length}`
       + ` (expand for the table)`;
     $("parsed").open = false;               // stay collapsed; the pill beside the buttons already counts
-    $("parseinfo").textContent = `${ok} of ${(d.items || []).length} resolved`;
+    $("parseinfo").textContent = `${ok} of ${(d.items || []).length} resolved`
+      + (ok ? ` · up to ${ok} model call${ok === 1 ? "" : "s"}` : "");
+    // say what the next click costs, before it is clicked
+    $("run").title = ok
+      ? `Send ${ok} photo${ok === 1 ? "" : "s"} to the model — one call each unless already cached`
+      : "";
     $("warnings").innerHTML = (d.warnings || []).map(w => `skipped “${esc(w.raw)}” — ${esc(w.reason)}`).join("<br>");
     setStage(ok === 0 ? "idle" : "checked");     // hand the blue highlight over to "Score them"
   } finally { $("check").disabled = false; }
@@ -773,6 +783,46 @@ $("input").addEventListener("input", () => {
   setStage("idle");
   $("parseinfo").textContent = "not checked yet — press Check inputs";
 });
+
+// ---- deep links: a list may arrive in the URL, but a link never starts a run ------------------
+// The value is *paste text* — newline-separated, exactly what you would have typed — and it is
+// assigned with `.value`, never innerHTML. There is deliberately no second separator: `|` is
+// tempting because it cannot appear in a MediaWiki title, but this app also accepts wikitext
+// (`[[File:Foo.jpg|thumb]]`), so translating pipes would silently corrupt a documented input form.
+// Commas are never delimiters here either: Commons file names contain them, and
+// wiclient._split_units() must stay the only splitter in the system (invariant 1).
+//
+// This is a client-side feature: the server never sees the query string, and `?check=1` merely
+// presses the same button a user would, so it adds no server-side capability an ordinary paste and
+// click does not already have (the server keeps its own caps: PARSE_MAX, MAX_INPUT_ITEMS).
+const URL_LIST_SOFT_MAX = 2000;    // beyond this a link stops being emailable or bookmarkable
+const URL_LIST_HARD_MAX = 4000;    // refuse outright; the pod logs the whole query string verbatim
+const URL_LIST_ACTION_MAX = 50;    // and never auto-check more entries than this
+
+function applyUrlParams() {
+  const qs = new URLSearchParams(location.search);
+  const raw = qs.get("list");
+  if (raw === null) return;                        // no ?list= : the box stays empty (invariant 12)
+  // drop the params immediately, so a reload or a copied address bar cannot replay them
+  history.replaceState(null, "", location.pathname);
+  const text = raw.replace(/\r\n?/g, "\n").trim();
+  const n = text.split("\n").filter(s => s.trim()).length;
+  if (!n) return;                                  // ?list= with nothing in it is inert
+  if (raw.length > URL_LIST_HARD_MAX) {
+    $("parseinfo").textContent = "that ?list= link is too long — paste the list instead";
+    return;
+  }
+  $("input").value = text;
+  $("input").classList.remove("hint-off");
+  setStage("idle");                                // loaded, not checked: Check inputs is next
+  $("parseinfo").textContent = `${n} photo${n === 1 ? "" : "s"} came from the link`
+    + (raw.length > URL_LIST_SOFT_MAX ? " (long link — pasting is more reliable)" : "")
+    + (qs.get("check") === "1" && n > URL_LIST_ACTION_MAX
+        ? ` — not auto-checked: more than ${URL_LIST_ACTION_MAX} entries`
+        : " — press Check inputs");
+  if (qs.get("check") === "1" && n <= URL_LIST_ACTION_MAX) $("check").click();
+}
+applyUrlParams();
 </script>
 </body>
 </html>

@@ -604,7 +604,16 @@ def about_payload() -> dict:
                   "<code>Foo.jpg, Bar.jpg</code> still splits. Files hosted on other Wikimedia wikis "
                   "work too and are labelled with their wiki. Non-photo media (SVG, PDF, video) "
                   "resolve as well, because Commons renders a raster preview. Category listings are "
-                  "<em>not</em> supported yet — paste the file names instead.</p>")},
+                  "<em>not</em> supported yet — paste the file names instead.</p>"
+                  "<p><b>Linking to a list:</b> <code>?list=</code> fills the box from the URL, and "
+                  "adding <code>&amp;check=1</code> also presses <i>Check inputs</i>. Entries are "
+                  "separated by <code>%0A</code> — deliberately the only separator, because "
+                  "<code>|</code> occurs in the wikitext form above and a comma occurs in real file "
+                  "names. Build links with <code>encodeURIComponent</code> (a literal "
+                  "<code>+</code> must be <code>%2B</code>, or it arrives as a space). Links are "
+                  "capped: refused past ~4,000 characters, and the input check is never run "
+                  "automatically for more than 50 entries. <b>A link never starts a run</b> — "
+                  "scoring always takes a click, because it spends a model call per photo.</p>")},
         {"title": "How a run works, step by step",
          "html": ("<ol>"
            "<li><b>Parse and normalise</b> each pasted line to a <code>File:</code> title. A line "

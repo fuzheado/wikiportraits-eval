@@ -80,6 +80,13 @@ required = {
     "ui renders the thumbnail": 'img.thumb' in js and '"src"' in js,
     "thumb CSS rule": ".item .thumb{" in html,
     "list is NOT re-rendered wholesale": '$("items").innerHTML' not in js,
+    # deep links: the URL layer must never grow a second splitter (invariant 1) and must stay inert
+    # unless a ?list= was supplied; and a link may press Check inputs but never Score them
+    "deep links add no comma splitting": 'split(",")' not in js,
+    "deep links are gated on ?list=": 'qs.get("list")' in js,
+    "deep links press Check inputs, never Score them":
+        '$("check").click()' in js and '$("run").click()' not in js,
+    "deep links have a hard length cap": 'URL_LIST_HARD_MAX' in js,
     "rows are created once (keyed map)": "const rows = new Map()" in js and "rowFor(" in js,
     "statuses: downloading + ready": '"downloading thumbnail"' in js and "ready · queued" in js,
     "per-row scoring clock": 'class="clock"' in js and "data-start" in js and "setInterval(" in js,

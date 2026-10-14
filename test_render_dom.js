@@ -281,5 +281,84 @@ function finish() {
   await new Promise((r) => setTimeout(r, 10));
   ok(!overlay.classList.contains('hidden'), 'reopening uses the cached payload');
   ok(srcSets.get(imgAfter) === 1, 'opening About did not touch the results list');
+
+  // ---- 8. deep links (?list= / ?check=1) --------------------------------------------------
+  // A fresh JSDOM per case, because the URL is read once at load. The stub records every fetch so we
+  // can assert the two rules that matter: a link may prefill and (with check=1) press Check inputs,
+  // but it must NEVER cause a run, and it must never split on a comma.
+  function withUrl(search) {
+    const calls = [];
+    const d2 = new JSDOM(html, {
+      runScripts: 'dangerously', pretendToBeVisual: true,
+      url: 'https://example.test/' + search,
+      beforeParse(window) {
+        window.fetch = async (url) => {
+          calls.push(String(url));
+          return {
+            ok: true, status: 200,
+            json: async () => {
+              const u = String(url);
+              if (u.includes('/api/default-list')) {
+                return { text: 'File:A.jpg\nFile:B.jpg', count: 2, source: 'default_list.txt' };
+              }
+              if (u.includes('/api/parse')) {
+                return { items: [{ raw: 'File:A.jpg', title: 'File:A.jpg', ok: true, pageid: 1 }],
+                         warnings: [], n: 1 };
+              }
+              if (u.includes('/api/run')) return { job_id: 'should-never-happen' };
+              return {};
+            },
+          };
+        };
+      },
+    });
+    return { win: d2.window, doc: d2.window.document, calls,
+             ran: () => calls.some((u) => u.includes('/api/run')),
+             parsed: () => calls.some((u) => u.includes('/api/parse')),
+             box: () => d2.window.document.getElementById('input').value };
+  }
+  const lines = (s) => s.split('\n').filter((x) => x.trim()).length;
+
+  const plain = withUrl('');
+  ok(plain.box() === '', 'no params: the box stays empty');
+  ok(!plain.parsed() && !plain.ran(), 'no params: nothing is fetched');
+
+  const two = withUrl('?list=' + encodeURIComponent('File:A.jpg\nFile:B.jpg'));
+  ok(lines(two.box()) === 2, '?list= prefills two entries');
+  ok(!two.parsed(), '?list= alone does not check anything (check=1 is required)');
+  ok(!two.ran(), '?list= never starts a run');
+
+  const commaName = 'File:MKr377445 Susanne Wuest (In die Sonne schauen, Cannes 2025).jpg';
+  const one = withUrl('?list=' + encodeURIComponent(commaName));
+  ok(lines(one.box()) === 1,
+     'a file name containing a comma stays ONE entry — the URL layer adds no comma rule');
+  ok(one.box() === commaName, 'the value arrives verbatim (no comma/paren mangling)');
+
+  const wikitext = '[[File:Foo.jpg|thumb|caption]]';
+  const wt = withUrl('?list=' + encodeURIComponent(wikitext));
+  ok(wt.box() === wikitext,
+     'wikitext pipes survive (a | shorthand separator would have corrupted this form)');
+
+  const checked = withUrl('?list=' + encodeURIComponent('File:A.jpg\nFile:B.jpg') + '&check=1');
+  await new Promise((r) => setTimeout(r, 40));
+  ok(checked.parsed(), '?check=1 presses Check inputs');
+  ok(!checked.ran(), '?check=1 still never starts a run');
+  ok(checked.win.location.search === '', 'the params are stripped so a reload cannot replay them');
+
+  const inert = withUrl('?check=1');
+  await new Promise((r) => setTimeout(r, 20));
+  ok(!inert.parsed() && inert.box() === '', '?check=1 without ?list= does nothing at all');
+
+  const many = Array.from({ length: 60 }, (_, i) => `File:P${i}.jpg`).join('\n');
+  const capped = withUrl('?list=' + encodeURIComponent(many) + '&check=1');
+  await new Promise((r) => setTimeout(r, 40));
+  ok(lines(capped.box()) === 60, 'a 60-entry link still prefills (only the auto-check is capped)');
+  ok(!capped.parsed(), 'more than 50 entries is not auto-checked');
+
+  const huge = withUrl('?list=' + 'A'.repeat(5000));
+  ok(huge.box() === '', 'an over-long ?list= is refused outright, not prefilled');
+  ok(/too long/.test(huge.doc.getElementById('parseinfo').textContent),
+     'and it says why');
+
   finish();
 })();

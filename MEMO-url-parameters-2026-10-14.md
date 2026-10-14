@@ -22,6 +22,25 @@ correction is marked.
 | 6 | `?listurl=<url>` (server fetches the list) | low — paste and `POST /api/run` already cover it | **high** — SSRF, open fetcher, proxy abuse | **refuse** |
 | 7 | `?run=1` auto-start | low — `check=1` leaves one click | **high** — spends from a link, with the ceiling unenforced | **refuse** |
 
+**Built the same day (v0.9.0): options 1 and 2, with a 50-entry action cap.** One correction to the
+grammar above, and it matters: **the `|` shorthand was dropped.** `|` cannot appear in a MediaWiki
+title, which is why it looked like a safe separator — but this app also accepts the *wikitext* form
+`[[File:Foo.jpg|thumb|caption]]` (About §2, README), so translating pipes to newlines would silently
+corrupt a documented input form. `?list=` is therefore newline-separated (`%0A`) **only**, which is
+also the safest possible rule: the URL layer performs no splitting at all, so
+`wiclient._split_units()` remains the only splitter in the system. `test_render_dom.js` now asserts
+that a piped wikitext value survives verbatim, and the comma case stays one entry.
+
+Guardrails as shipped: a link may prefill and press *Check inputs*, and **never starts a run**; the
+params are stripped from the address bar with `replaceState` so a reload cannot replay them; over
+~4,000 characters is refused outright rather than echoed (the pod logs the whole query string, as
+measured in §3); auto-check is capped at 50 entries. All of it is client-side, so the server-side
+surface is unchanged: `/api/parse` sees an ordinary request and keeps `PARSE_MAX` / `MAX_INPUT_ITEMS`.
+
+**Not built, deliberately:** `?listurl=` (§4), `?run=1` (§5), and `?fresh=1` — the last one is a
+one-liner but it was not part of the approved scope, and it is the half of auto-start that would spend
+without a click.
+
 ---
 
 ## 1. Why (1) and (2) are cheap: it is a client-side feature

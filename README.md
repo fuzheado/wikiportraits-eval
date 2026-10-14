@@ -97,6 +97,29 @@ Non-photo media (SVG, PDF, video) also resolve, because Commons renders a raster
 
 Not supported yet: `Category:` listings — paste the file names instead.
 
+### Linking to a list you already have
+
+A list can also arrive in the URL, which is handy for a workshop, an event page, or a report that
+links straight into the tool:
+
+```
+https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg
+https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&check=1
+```
+
+- **`?list=`** fills the box. Entries are separated by `%0A` (a newline) — **deliberately the only
+  separator**: a comma occurs in real Commons file names and `|` occurs in the wikitext form above, so
+  those characters must never be treated as delimiters here.
+- **`&check=1`** additionally presses **Check inputs**, so the link lands showing "12 of 12 resolved"
+  and an armed Score button.
+- Build links with `encodeURIComponent` in your language (`encodeURIComponent('File:A.jpg\nFile:B.jpg')`).
+  Percent-encode a literal `+` as `%2B`, or it will arrive as a space.
+- **A link never starts a run.** Scoring spends a model call per photo, so it always takes a click.
+- The parameters are dropped from the address bar as soon as they are read, so a reload or a copied
+  link cannot replay them.
+- Caps: links longer than ~4,000 characters are refused, and the input check is never run
+automatically for more than 50 entries. The server keeps its own limits regardless of the URL.
+
 ## What the numbers mean
 
 Six questions are asked in one pass; the model generates no text, it returns probabilities. Three
