@@ -6,6 +6,9 @@ node_modules/
 __pycache__/
 *.pyc
 static/_index_extracted.js
+# written by test_pdf_images.py on every run, so tracking them made the repo churn on any PDF change
+research/pdfmin_image_test.pdf
+research/pdfmin_image_test.png
 *.tar.gz
 *.log
 server.log

@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Live probes behind the proposed commons-file-resolution addition.
 
+**Historical — kept for the record, not wired into anything.** The findings these probes
+established were upstreamed to the `commons-file-resolution` skill (Wikipedia-AI-Skills,
+SOP 6, PR #93 — see `HANDOFF.md` §9), so the *rules* are maintained there. What is still
+worth having locally is the evidence: fact B is the origin of invariant 1 in `HANDOFF.md`
+§3 — the Action API's `titles=` does treat a comma as a separator, which is why the parser
+and any batch query use newlines / `|` and never split on commas. Re-run it if you need to
+re-establish those facts; nothing in the test suite depends on it.
+
 Facts under test (2026-10-13, all against live Commons):
   A. Special:FilePath with and without the File: prefix
   B. comma-separated titles= is a real separator in the Action API -> breaks filenames with commas

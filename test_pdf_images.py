@@ -3,6 +3,10 @@
 
 Renders the produced PDF back to PNG with pypdfium2 (dev-only dependency in .venv-pdf) so
 the result can be eyeballed, and asserts the PDF really carries the image objects.
+
+**The two files it writes into `research/` are generated output and are gitignored**
+(`research/pdfmin_image_test.pdf` / `.png`). They used to be tracked, so every run produced a
+spurious diff; if you want to look at them, run this script and open them.
 """
 import os
 import sys
