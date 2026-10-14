@@ -197,7 +197,8 @@ Six questions are asked in one pass; the model generates no text, it returns pro
 headline numbers come out of them, and they are not the same kind of thing:
 
 - **composite** — *our* arithmetic, not the model's: `min(face_visible, eyes_to_camera) × pose
-  weight` (head-and-shoulders 1.0, three-quarter 0.9, full body 0.6, candid 0.5, group 0.25). **This
+  weight × unobstructed` (head-and-shoulders 1.0, three-quarter 0.9, full body 0.6, candid 0.5,
+  group 0.25; **unobstructed** scales by 0.5–1.0). **This
   is the ranking key**, and every ingredient is shown on the card so you can disagree with the
   weighting. It exists because questions about something *visible in the frame* separate photos well
   while editorial ones collapse toward the middle (measured on 57 photos: face_visible spread 0.372,

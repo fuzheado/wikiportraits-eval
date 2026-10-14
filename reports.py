@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 import wiclient
 from pdfmin import PDF, MARGIN, CONTENT_W
 
-ORDER = ["face_visible", "pose", "quality", "infobox_ready", "publish_ready", "eyes_to_camera"]
+ORDER = ["face_visible", "face_unobstructed", "pose", "quality", "infobox_ready", "publish_ready",
+         "eyes_to_camera"]
 TYPE_LABEL = {"noul": "yes/no", "choice": "choice", "score": "score"}
 
 
@@ -24,7 +25,8 @@ def publish(item):
 
 
 def composite(item):
-    """Our composite: min(face_visible, eyes_to_camera) x pose weight (not a model probability)."""
+    """Our composite: min(face_visible, eyes_to_camera) x pose weight x the obstruction factor
+    (not a model probability)."""
     v = item.get("composite")
     return wiclient.composite(_ans(item)) if v is None else v
 
@@ -141,7 +143,8 @@ def _method_block(model_note=""):
         "generates no text (usage.output_tokens = 0). Question types: "
         "face_visible (yes/no), pose (choice of 5), quality (score 0-4), infobox_ready (yes/no), "
         "publish_ready (choice of 2: publish / pass), eyes_to_camera (yes/no).",
-        "Headline numbers: composite = min(face_visible, eyes_to_camera) x pose weight "
+        "Headline numbers: composite = min(face_visible, eyes_to_camera) x pose weight x obstruction "
+        "factor, where the factor is 0.5 + 0.5 x P(the face is free of anything held in front of it). "
         "(head-and-shoulders 1.0, three-quarter 0.9, full body 0.6, candid 0.5, group 0.25). That is "
         "our arithmetic on three model answers, NOT a model probability; P(publish) and P(infobox) "
         "are the model's own. Ranking uses the composite.",
@@ -167,7 +170,8 @@ def build_md(items: list, meta: dict) -> str:
     L += [f"- P(infobox-ready): mean **{st['p_infobox_mean']}** · median {st['p_infobox_median']} · "
           f"max {st['p_infobox_max']} · **{st['n_above_half']} of {st['n_scored']}** at or above 0.5"]
     L += [f"- P(publish): mean **{st['p_publish_mean']}**  ·  composite (our arithmetic, "
-          f"min(face, eyes) × pose weight): mean **{st['composite_mean']}**, max {st['composite_max']}"]
+          f"min(face, eyes) × pose weight × unobstructed): mean **{st['composite_mean']}**, "
+          f"max {st['composite_max']}"]
     L += [f"- Quality (0–4): mean **{st['quality_mean']}**"]
     L += [f"- Pose mix: " + ", ".join(f"{k} {v}" for k, v in sorted(st["poses"].items(), key=lambda kv: -kv[1]))]
     sp_all = meta.get("spread") or {}
@@ -288,14 +292,18 @@ POSE_SHORT = {"head_shoulders": "head & shoulders", "three_quarter": "three-quar
 
 CANDIDATE_WINDOW = 12        # how many top photos the "candidates" axis spans, and
 CANDIDATE_FLOOR_RATIO = 0.8  # …it never reaches below this share of the best score.
-                             # **Both must match `CANDIDATE_WINDOW` / `CANDIDATE_FLOOR_RATIO` in
-                             # static/index.html** — the web UI and this export have to agree on what
-                             # "the candidates" are, and nothing enforces it (test_ui_contract.py
-                             # checks the two numbers appear in the served page, which is the closest
-                             # thing to a guard).
+SCALE_EXPONENT = 2           # the "top-weighted" axis bend, x = t**SCALE_EXPONENT
+                             # **All three must match static/index.html** — the web UI and this export
+                             # have to agree on what "the candidates" are and how the axis is bent, and
+                             # nothing enforces it (test_ui_contract.py checks the numbers appear in
+                             # the served page, which is the closest thing to a guard).
+                             #
+                             # Note what the bend is NOT: a logarithmic axis is the opposite of what
+                             # "give the top room" needs. log10(1 + 9v) hands the bottom half 74% of the
+                             # width (measured 2026-10-14); t**2 gives the top half 75%.
 
 
-def _pdf_chart(doc, items, by_pose=False, axis="full"):
+def _pdf_chart(doc, items, by_pose=False, axis="full", scale="linear"):
     """The composite-distribution chart, as in the web UI: thumbnails plotted along the axis,
     stacked into lanes when they would overlap.
 
@@ -334,8 +342,12 @@ def _pdf_chart(doc, items, by_pose=False, axis="full"):
     pad = TW / 2 if windowed else 0.0
 
     def xpos(v, x0, w):
-        """Map a composite onto the axis. `pad` keeps the two extreme thumbs fully inside."""
-        return x0 + pad + ((v - lo) / span) * max(1.0, w - 2 * pad)
+        """Map a composite onto the axis. `pad` keeps the two extreme thumbs fully inside, and the
+        scale bends the placement *inside* the window (so window and scale compose)."""
+        t = (v - lo) / span
+        if scale == "top":
+            t = max(0.0, t) ** SCALE_EXPONENT
+        return x0 + pad + t * max(1.0, w - 2 * pad)
 
     def ticks():
         """Tick positions: 0.1 as it always was, finer when fitted to a narrow band (a 0.90-0.96
@@ -355,11 +367,34 @@ def _pdf_chart(doc, items, by_pose=False, axis="full"):
     def tick_label(v):
         return f"{v:.3f}".rstrip("0").rstrip(".") if windowed else f"{v:.1f}"
 
+    def tick_marks(x0, w):
+        """(x, label-or-None) per tick: every mark is drawn, but a label only where it will not touch
+        the previous one. A bent axis crowds the low end by construction (t² puts 0.1 at 1% of the
+        width) and a narrow window crowds everything, so space by measured width, not by guesswork.
+        3.6pt per character is the 6pt figure width.
+
+        The text variable is deliberately NOT called `label`: that name is a module-level function
+        used by `draw_thumb`, and assigning it anywhere in this scope shadows it for the whole
+        function — which broke thumbnail embedding with `TypeError: 'str' object is not callable`.
+        """
+        out, last_right = [], -1e9
+        for v in ticks():
+            x = xpos(v, x0, w)
+            text = tick_label(v)
+            half = (len(text) * 3.6) / 2
+            if x - half >= last_right + 2:
+                out.append((x, text))
+                last_right = x + half
+            else:
+                out.append((x, None))
+        return out
+
     def axis_caption():
+        bend = f" · bent axis: x = t^{SCALE_EXPONENT}" if scale == "top" else ""
         if windowed:
             return (f"axis {lo:.2f} -> {hi:.3f} · the top {len(plotted)} of {len(done)} scored"
-                    + (f"; {outside} below the window" if outside else ""))
-        return f"axis 0 -> {hi:.1f} (best photo {maxc:.3f})"
+                    + (f"; {outside} below the window" if outside else "") + bend)
+        return f"axis 0 -> {hi:.1f} (best photo {maxc:.3f}){bend}"
 
     reg = {}                                     # unique thumbnails, embedded once each
 
@@ -416,14 +451,15 @@ def _pdf_chart(doc, items, by_pose=False, axis="full"):
         doc._need(max_lane * ROW + 84 + 34)
         doc.text("Composite by photo", size=11, bold=True)
         doc.small(f"{axis_caption()} · our arithmetic, min(face, eyes) × "
-                  f"pose weight — not a model probability · thumbs stack when they would overlap")
+                  f"pose weight × unobstructed — not a model probability · thumbs stack when they "
+                  f"would overlap")
         doc.spacer(4)
         y_axis = doc.y - (max_lane * ROW + 84)
         doc.line_at(MARGIN, y_axis, MARGIN + CONTENT_W, y_axis, color=(0.25, 0.29, 0.35), w=1.0)
-        for v in ticks():
-            x = xpos(v, MARGIN, CONTENT_W)
+        for x, text in tick_marks(MARGIN, CONTENT_W):
             doc.line_at(x, y_axis, x, y_axis - 4)
-            doc.text_at(tick_label(v), x - 8, y_axis - 13, size=6)
+            if text is not None:
+                doc.text_at(text, x - 8, y_axis - 13, size=6)
         for it, x, lane in placed:
             draw_thumb(it, x, y_axis + 4 + lane * ROW + 9, ranks[id(it)])
         doc.y = y_axis - 18
@@ -453,15 +489,14 @@ def _pdf_chart(doc, items, by_pose=False, axis="full"):
     doc._need(total + 34)
     doc.text("Composite by photo, by pose", size=11, bold=True)
     doc.small(f"{axis_caption()} · our arithmetic, min(face, eyes) × "
-              f"pose weight — not a model probability · one stratum per pose, in the order the "
-              f"pose question lists them; rank badges stay global to the run")
+              f"pose weight × unobstructed — not a model probability · one stratum per pose, in the "
+              f"order the pose question lists them; rank badges stay global to the run")
     doc.spacer(4)
 
     chart_bottom = doc.y - total
     y_top = chart_bottom + total
     # gridlines first, so the bands and thumbnails draw over them
-    for v in ticks():
-        x = xpos(v, x0, w)
+    for x, _text in tick_marks(x0, w):
         doc.line_at(x, chart_bottom, x, y_top, color=(0.87, 0.89, 0.92))
     y = y_top
     for g in groups:
@@ -473,13 +508,14 @@ def _pdf_chart(doc, items, by_pose=False, axis="full"):
             draw_thumb(it, x, floor + 4 + lane * ROW + 9, ranks[id(it)])
         y = floor
     doc.line_at(x0, chart_bottom, x0 + w, chart_bottom, color=(0.25, 0.29, 0.35), w=1.0)
-    for v in ticks():
-        x = xpos(v, x0, w)
+    for x, text in tick_marks(x0, w):
         doc.line_at(x, chart_bottom, x, chart_bottom - 4)
-        doc.text_at(tick_label(v), x - 8, chart_bottom - 13, size=6)
+        if text is not None:
+            doc.text_at(text, x - 8, chart_bottom - 13, size=6)
     doc.y = chart_bottom - 18
 
-def build_pdf(items: list, meta: dict, chart_view: str = "combined", chart_axis: str = "full") -> bytes:
+def build_pdf(items: list, meta: dict, chart_view: str = "combined", chart_axis: str = "full",
+              chart_scale: str = "linear") -> bytes:
     st = stats(items)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     doc = PDF(title="WikiPortraits Eval report", subtitle=ts)
@@ -501,7 +537,7 @@ def build_pdf(items: list, meta: dict, chart_view: str = "combined", chart_axis:
         f"P(infobox-ready): mean {st['p_infobox_mean']}  ·  median {st['p_infobox_median']}  ·  "
         f"max {st['p_infobox_max']}  ·  {st['n_above_half']} of {st['n_scored']} at or above 0.5",
         f"P(publish): mean {st['p_publish_mean']}   ·   composite (ours, min(face, eyes) x pose "
-        f"weight): mean {st['composite_mean']}, max {st['composite_max']}",
+        f"weight x unobstructed): mean {st['composite_mean']}, max {st['composite_max']}",
         f"Quality (0-4): mean {st['quality_mean']}",
         "Pose mix: " + ", ".join(f"{k} {v}" for k, v in sorted(st["poses"].items(), key=lambda kv: -kv[1])),
         f"Wall: median {st['wall_median_s']} s per call, {st['wall_total_s']} s total  ·  "
@@ -529,7 +565,7 @@ def build_pdf(items: list, meta: dict, chart_view: str = "combined", chart_axis:
     for l in lines:
         doc.text(l, size=9)
     doc.spacer(6)
-    _pdf_chart(doc, items, by_pose=(chart_view == "pose"), axis=chart_axis)
+    _pdf_chart(doc, items, by_pose=(chart_view == "pose"), axis=chart_axis, scale=chart_scale)
     doc.spacer(8)
     doc.h2("All images, ranked by composite")
     widths = [14, 128, 44, 44, 40, 44, 34, 36, 32]

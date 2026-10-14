@@ -54,6 +54,7 @@
   /* the summary for a clump too deep to draw in full: it says how many are there, and lists the
      lowest-ranked of them on hover, rather than hiding them without a word */
   .cchip{position:absolute;transform:translateX(-50%);font-size:10.5px;font-weight:700;color:#fff;
+         z-index:2;
          background:var(--muted);border-radius:999px;padding:1px 7px;cursor:help;
          font-variant-numeric:tabular-nums}
   .stat .k{font-size:12px;color:var(--muted)}
@@ -109,7 +110,12 @@
   .cposes .plabel{position:absolute;right:4px;text-align:right;font-size:11px;color:var(--muted);
                   line-height:1.2;white-space:nowrap}
   .cposes .plabel b{display:block;color:var(--ink);font-size:11.5px;font-weight:650}
-  .cgrid{position:absolute;top:0;bottom:20px;width:1px;background:var(--line);opacity:.6}
+  /* Stacking, lowest first. Every one of these is absolutely positioned, so without an explicit
+     z-index the paint order is DOM order — and the gridlines are re-added after the thumbnails, which
+     put the faint vertical rule ON TOP of the photos (reported 2026-10-14). The grid is decoration and
+     belongs under the pictures; the tick marks sit under them too, so a thumbnail is never crossed by
+     chart furniture. */
+  .cgrid{position:absolute;top:0;bottom:20px;width:1px;background:var(--line);opacity:.6;z-index:0}
   #spreaddetails{margin-top:6px}
   /* the detail popup: the same determinations as a result card, without leaving the page */
   .detailrow{display:flex;gap:14px;align-items:flex-start;margin-bottom:10px}
@@ -118,11 +124,14 @@
   .detailrow .meta{margin:0 0 6px}
   .cthumb{cursor:pointer}
   #spreaddetails summary{cursor:pointer;font-size:12.5px}
-  .chartbox .caxis{position:absolute;left:0;right:0;bottom:20px;height:2px;background:var(--ink);opacity:.25}
+  .chartbox .caxis{position:absolute;left:0;right:0;bottom:20px;height:2px;background:var(--ink);
+                   opacity:.25;z-index:0}
   .ctick{position:absolute;bottom:0;transform:translateX(-50%);font-size:11px;color:var(--muted);
+         z-index:1;
          font-variant-numeric:tabular-nums}
   .ctick::after{content:"";position:absolute;left:50%;top:-6px;width:1px;height:6px;background:var(--line)}
   .cthumb{position:absolute;display:flex;flex-direction:column;align-items:center;gap:2px;
+          z-index:2;
           text-decoration:none;filter:drop-shadow(0 1px 2px rgba(9,17,30,.25));
           /* the chart is drawn live as results land, so a thumbnail MOVES rather than being
              re-created — this is what turns an axis rescale from a jump into a slide */
@@ -251,6 +260,9 @@
       <span class="meter" style="margin-left:10px">axis:</span>
       <button id="ca-full" class="csize" title="the whole field: 0 up to the best score">whole field</button>
       <button id="ca-cand" class="csize" title="fit the axis to the top candidates, so the photos you can actually use get the full width">candidates</button>
+      <span class="meter" style="margin-left:10px">scale:</span>
+      <button id="sc-linear" class="csize" title="even spacing: the same difference in composite is the same distance on screen">linear</button>
+      <button id="sc-top" class="csize" title="give the upper range most of the width (x = t²) so the best photos separate; the low end compresses, which is usually where the unusable ones are">top-weighted</button>
       <span class="meter" style="margin-left:10px">thumbnail size:</span>
       <button id="cs-s" class="csize" title="small">S</button>
       <button id="cs-m" class="csize" title="medium">M</button>
@@ -345,12 +357,14 @@ function renderBody(it) {
     const pubP = pubProbs(pub);
     const comp = it.composite;
     return `
-      ${comp != null ? `<div class="q"><div><b>composite → ${fmt(comp)}</b> <span class="meter">(our arithmetic: min(face, eyes) × pose weight — not a model probability)</span></div>
+      ${comp != null ? `<div class="q"><div><b>composite → ${fmt(comp)}</b> <span class="meter">(our arithmetic: min(face, eyes) × pose weight × unobstructed — not a model probability)</span></div>
         <div class="track"><div class="fill" style="width:${(comp * 100).toFixed(1)}%"></div></div>
         <div class="val">${fmt(comp)}</div></div>` : ""}
       ${pub.choice ? bar(`publish → ${pub.choice} (model's own choice)`, pubP) : ""}
       ${bar("infobox ready (P true)", a.infobox_ready.noul)}
       ${bar("face visible (P true)", a.face_visible.noul)}
+      ${a.face_unobstructed ? bar("face unobstructed (P true) — a held mic or hand demotes the score",
+                                  a.face_unobstructed.noul) : ""}
       ${bar("eyes → camera (P true)", a.eyes_to_camera.noul)}
       <div class="q"><div>pose → <b>${esc(a.pose.choice)}</b></div>
         <div class="track"><div class="fill" style="width:${(a.pose.probabilities[a.pose.choice] * 100).toFixed(1)}%"></div></div>
@@ -492,8 +506,7 @@ const CANDIDATE_FLOOR_RATIO = 0.8;   // …and it never reaches below this share
 const DRAWN_LANES = 8;
 let axisMode = (function () { try { return localStorage.getItem("wp-chart-axis") || "full"; }
                               catch (e) { return "full"; } })();
-const AXIS_MODES = [["ca-full", "full"], ["ca-cand", "candidates"]];
-function setAxisMode(m) {
+const AXIS_MODES = [["ca-full", "full"], ["ca-cand", "candidates"]];function setAxisMode(m) {
   axisMode = m;
   try { localStorage.setItem("wp-chart-axis", m); } catch (e) {}
   markChartAxis();
@@ -506,6 +519,31 @@ function markChartAxis() {
 }
 AXIS_MODES.forEach(([id, m]) => { const b = $(id); if (b) b.onclick = () => setAxisMode(m); });
 markChartAxis();
+
+// Axis SCALE — how the window's width is shared out. "linear" is even spacing. "top-weighted" raises
+// the placement to a power (x = t^2), which gives the upper range most of the width; that is the
+// direction that helps, because the low end is mostly photos that failed the same way.
+// **A logarithmic axis is the opposite of this.** log10(1 + 9v) hands the BOTTOM half 74% of the
+// width — measured 2026-10-14 — so "log" is not the control anyone wants here, however it sounds.
+// For scale: the top 9 of 100 real photos span 0.052 of composite, which is 9 lanes deep on a linear
+// axis, 5 on this one, and 2 in the candidates window.
+const SCALE_EXPONENT = 2;         // must match SCALE_EXPONENT in reports.py (check_js.py enforces it)
+const SCALE_MODES = [["sc-linear", "linear"], ["sc-top", "top"]];
+let scaleMode = (function () { try { return localStorage.getItem("wp-chart-scale") || "linear"; }
+                               catch (e) { return "linear"; } })();
+function setScaleMode(m) {
+  scaleMode = m;
+  try { localStorage.setItem("wp-chart-scale", m); } catch (e) {}
+  markChartScale();
+  if (lastJob) renderChart(lastJob);
+}
+function markChartScale() {
+  SCALE_MODES.forEach(([id, m]) => {
+    const b = $(id); if (b) b.classList.toggle("active", m === scaleMode);
+  });
+}
+SCALE_MODES.forEach(([id, m]) => { const b = $(id); if (b) b.onclick = () => setScaleMode(m); });
+markChartScale();
 
 // Row order: best-first (the ranking) or the order the lines arrived in — which is also the order
 // they were evaluated, so it doubles as a progress view. Presentation only: the composite rank is
@@ -543,6 +581,7 @@ function renderChart(job) {
   markChartSize();
   markChartMode();
   markChartAxis();
+  markChartScale();
 
   // One full clear per RUN, never per poll. Everything below this line patches nodes in place.
   const key = String(job.id || "");
@@ -615,14 +654,19 @@ function renderChart(job) {
   const w = box.clientWidth || 800;
   const pad = windowed ? TW / 2 : 0;                 // keep the two extreme thumbs fully inside
   const span = Math.max(1e-9, hi - lo);
-  const xOf = (v) => pad + ((v - lo) / span) * Math.max(1, w - 2 * pad);
+  // `t` is where a value sits inside the window (0..1); the scale bends that placement. Applied AFTER
+  // the window, so the two compose: the window chooses WHICH range is shown, the scale decides how
+  // that range's width is shared out.
+  const bend = (t) => (scaleMode === "top" ? Math.pow(Math.max(0, t), SCALE_EXPONENT) : t);
+  const xOf = (v) => pad + bend((v - lo) / span) * Math.max(1, w - 2 * pad);
 
   meterEl.innerHTML = (windowed
       ? `axis ${fmt(lo, 2)} → ${fmt(hi, 3)} · the top ${plotted.length} of ${done.length} scored`
         + (outside ? `; ${outside} below the window` : "")
       : `axis 0 → ${fmt(hi, 1)} (best photo ${fmt(max)})`)
+    + (scaleMode === "top" ? ` · bent axis: x = t^${SCALE_EXPONENT}, so the upper range gets the room` : "")
     + ` · <b>${nDone} of ${all.length} scored</b>${running ? " so far" : ""} · our arithmetic, `
-    + `min(face, eyes) × pose weight — not a model probability · `
+    + `min(face, eyes) × pose weight × unobstructed — not a model probability · `
     + (byPose ? "one stratum per pose; rank badges stay global"
               : "thumbs stack when they would overlap");
 
@@ -773,9 +817,15 @@ function renderChart(job) {
     const raw = (hi - lo) / 6;
     tickStep = [0.0025, 0.005, 0.01, 0.02, 0.05, 0.1].find((s) => s >= raw) || 0.1;
   }
+  // Draw a mark for every tick, but only write a LABEL where it will not touch the previous one. A
+  // bent axis crowds the low end by construction (x = t² puts 0.1 at 1% of the width), and a narrow
+  // window crowds everything; spacing by measured pixels adapts to the width instead of guessing.
+  // 6.6px per character is the tabular figure width at this font size.
+  let lastLabelRight = -Infinity;
   for (let v = (windowed ? Math.ceil(lo / tickStep) * tickStep : 0); v <= hi + 1e-9; v += tickStep) {
     const val = Math.round(v * 10000) / 10000;
-    const left = ((xOf(val) / w) * 100).toFixed(2);
+    const x = xOf(val);
+    const left = ((x / w) * 100).toFixed(2);
     if (byPose) {
       const gl = document.createElement("span");
       gl.className = "cgrid";
@@ -785,10 +835,18 @@ function renderChart(job) {
     const t = document.createElement("span");
     t.className = "ctick";
     t.style.left = left + "%";
-    t.textContent = windowed ? String(Math.round(val * 1000) / 1000) : val.toFixed(1);
+    const label = windowed ? String(Math.round(val * 1000) / 1000) : val.toFixed(1);
+    const half = (label.length * 6.6) / 2;
+    if (x - half >= lastLabelRight + 4) {
+      t.textContent = label;
+      lastLabelRight = x + half;
+    }
     grid.appendChild(t);
   }
-  box.appendChild(grid);
+  const firstThumb = box.querySelector(".cthumb");
+  // insert BEFORE the thumbnails, not after: belt to the CSS z-index braces, so the grid is under the
+  // photos in DOM order as well as in the stacking order
+  if (firstThumb) box.insertBefore(grid, firstThumb); else box.appendChild(grid);
 }
 
 window.addEventListener("resize", () => { if (lastJob) renderChart(lastJob); });
@@ -1291,6 +1349,7 @@ $("share").onclick = async () => {
   const q = new URLSearchParams({ list: titles.join("\n"), run: "1" });
   if (chartMode === "pose") q.set("view", "pose");
   if (axisMode === "candidates") q.set("axis", "candidates");
+  if (scaleMode === "top") q.set("scale", "top");
   const url = `${location.origin}${location.pathname}?${q.toString()}`;
   const box = $("shareurl");
   if (url.length > URL_LIST_HARD_MAX) {
@@ -1313,6 +1372,7 @@ $("share").onclick = async () => {
     if (f === "pdf") {
       if (chartMode === "pose") p.push("view=pose");
       if (axisMode === "candidates") p.push("axis=candidates");
+      if (scaleMode === "top") p.push("scale=top");
     }
     window.location = `/api/job/${jobId}/report.${f}${p.length ? "?" + p.join("&") : ""}`;
   };
@@ -1378,6 +1438,7 @@ function applyUrlParams() {
   // the chart view and axis are display preferences, so honour them even without a list
   if (qs.get("view") === "pose") setChartMode("pose");
   if (qs.get("axis") === "candidates") setAxisMode("candidates");
+  if (qs.get("scale") === "top") setScaleMode("top");
   const raw = qs.get("list");
   if (raw === null) return;                        // no ?list= : the box stays empty (invariant 12)
   // drop the params immediately, so a reload or a copied address bar cannot replay them

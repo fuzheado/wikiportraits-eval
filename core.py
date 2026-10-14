@@ -797,9 +797,14 @@ def about_payload() -> dict:
                  + "</table>"
                  + "<p><b>The three headline numbers, and what each one is:</b></p><ul>"
                  + ("<li><b>composite</b> — <i>not a model probability</i>. This is our own "
-                    "arithmetic: <code>min(face_visible, eyes_to_camera) × pose weight</code>, with "
+                    "arithmetic: <code>min(face_visible, eyes_to_camera) × pose weight × "
+                    "unobstructed</code>, with "
                     "head-and-shoulders 1.0, three-quarter 0.9, full body 0.6, candid 0.5, group "
-                    "0.25. It is the ranking key because the questions that ask about something "
+                    "0.25. <b>unobstructed</b> is the model's answer to whether anything is held in "
+                    "front of the face (a microphone, a hand): it scales the score by 0.5–1.0, so a "
+                    "covered face is demoted rather than disqualified — the photo may still be the "
+                    "best one that exists of that person. It is the ranking key because the questions "
+                    "that ask about something "
                     "<i>visible in the frame</i> separate photos well, while the editorial ones "
                     "collapse toward the middle — measured on 57 photos: face_visible spread 0.372, "
                     "eyes_to_camera 0.350, infobox_ready 0.229, quality 0.145 (sd). Every "
@@ -1165,9 +1170,10 @@ def _report(job, fmt, query=""):
     # reports.CANDIDATE_WINDOW, which the two have to agree on.
     chart_view = "pose" if "view=pose" in (query or "") else "combined"
     chart_axis = "candidates" if "axis=candidates" in (query or "") else "full"
+    chart_scale = "top" if "scale=top" in (query or "") else "linear"
     meta = {"state": STATE, "questions": QUESTIONS, "elapsed_s": job.get("elapsed_s"),
             "latency": latency_summary(job), "spread": job.get("spread"),
-            "chart_view": chart_view, "chart_axis": chart_axis,
+            "chart_view": chart_view, "chart_axis": chart_axis, "chart_scale": chart_scale,
             "no_cache": bool(job.get("no_cache")),
             "cached_only": bool(job.get("cached_only")),
             "pdf_path": os.path.join(CACHE_DIR, f"report-{job['id']}.pdf")}
@@ -1184,6 +1190,7 @@ def _report(job, fmt, query=""):
                 {"Content-Disposition": "attachment; " + name})
     if fmt == "pdf":
         return (200, "application/pdf",
-                reports.build_pdf(job["items"], meta, chart_view=chart_view, chart_axis=chart_axis),
+                reports.build_pdf(job["items"], meta, chart_view=chart_view,
+                                  chart_axis=chart_axis, chart_scale=chart_scale),
                 {"Content-Disposition": "attachment; " + name})
     return 400, "application/json", json.dumps({"error": "unknown format"}).encode(), {}

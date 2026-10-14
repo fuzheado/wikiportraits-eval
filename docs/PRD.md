@@ -170,10 +170,18 @@ Downloads for later photos run in a background thread while the model answers fo
   panel. `publish_ready` was added 2026-10-13 after the wording experiment; adding it changed the
   schema hash, so it invalidated every cached answer by design.
 - **Three headline numbers, only two of which are the model's.** The list is ranked by a
-  **composite** this app computes — `min(face_visible, eyes_to_camera) × pose weight` — which is
+  **composite** this app computes — `min(face_visible, eyes_to_camera) × pose weight × unobstructed`
+  — which is
   labelled as our arithmetic everywhere it appears; `P(publish)` and `P(infobox)` are the model's own
   answers and are shown beside it. Run-level separation is reported as **candidate spread** (range and
   median gap among answers at or above the candidate floor), never as standard deviation.
+
+  **`obstruction_factor()`** (2026-10-14) answers "is anything held in front of the face?" and scales
+  the composite by `0.5 + 0.5 × P(clear)` — a demotion, never a disqualification, since the photo may
+  still be the best one that exists of that person. It is its own question rather than a rewording,
+  because `face_visible` already asks about visibility and the model reads that as *can I see the
+  face*: a microphone over the mouth scores 0.83 on it, and 0.14 on this one. Adding it changed the
+  schema hash, so every cached answer was invalidated by design, as with `publish_ready`.
 - **Image handling:** the server downscales to 640 px wide before the vision encoder, so requesting
   larger thumbnails adds bandwidth but no information. Input tokens are deterministic per aspect
   ratio (measured: 865 at 16:9, 905 at 3:2 … 1,245 at 2:3 for this schema).

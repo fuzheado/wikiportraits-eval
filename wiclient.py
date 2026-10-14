@@ -8,7 +8,7 @@ import urllib.error, urllib.parse, urllib.request
 # The app version lives here rather than in core.py because both need it: core reports it (About,
 # reports) and this module puts it in the default User-Agent. One source of truth — before this, the
 # UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
-APP_VERSION = "0.19.1"
+APP_VERSION = "0.20.0"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
     f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")
@@ -47,6 +47,9 @@ STATE = ("WikiPortraits photograph of a public figure, taken by a volunteer phot
 QUESTIONS = {
     "face_visible": {"type": "noul",
                      "instructions": "Is at least one person's face clearly visible and unobstructed?"},
+    "face_unobstructed": {"type": "noul",
+                          "instructions": "Is the subject's face free of anything held in front of "
+                                          "it, such as a microphone or a hand?"},
     "pose": {"type": "choice",
              "instructions": "What is the subject's pose and framing?",
              "criteria": {
@@ -74,13 +77,33 @@ SCHEMA_HASH = hashlib.sha1(json.dumps({"state": STATE, "questions": QUESTIONS},
                                       sort_keys=True).encode()).hexdigest()[:12]
 MISSING = object()
 
-# The composite: our arithmetic on three model answers, not a model probability. It exists because
+# The composite: our arithmetic on four model answers, not a model probability. It exists because
 # the visible-fact questions spread across the corpus (face_visible sd 0.372, eyes_to_camera 0.350)
 # while the editorial one collapses toward the middle (infobox_ready sd 0.229) — see
 # research/wording-experiment-2026-10-13.md. Reported separately from P(publish) and P(infobox).
 POSE_WEIGHT = {"head_shoulders": 1.0, "three_quarter": 0.9, "full_body": 0.6, "candid": 0.5,
                "group": 0.25}
+# A microphone — or a hand, or a phone — held in front of the face costs a BOUNDED share of the
+# composite: a fully covered face keeps OBSTRUCTION_FLOOR of its score and a clear face keeps all of
+# it. Deliberately a demotion and not a disqualification (the requirement, 2026-10-14): a mic over the
+# mouth is a real defect in a lead image, but the photo may still be the best one that exists of that
+# person. Reported per photo as its own `face_unobstructed` probability, so the cost is attributable
+# rather than buried in another question's answer.
+OBSTRUCTION_FLOOR = 0.5
 CANDIDATE_FLOOR = float(os.environ.get("CANDIDATE_FLOOR", "0.25"))
+
+
+def obstruction_factor(ans: dict) -> float:
+    """What a held object in front of the face costs, in [OBSTRUCTION_FLOOR, 1].
+
+    Returns 1.0 when the question is ABSENT: an answer recorded before this question existed, or a
+    test fixture, means "not known", never "obstructed". Treating a missing answer as a penalty would
+    silently demote every photo the moment the schema changed.
+    """
+    u = (ans.get("face_unobstructed") or {}).get("noul")
+    if u is None:
+        return 1.0
+    return round(OBSTRUCTION_FLOOR + (1.0 - OBSTRUCTION_FLOOR) * max(0.0, min(1.0, u)), 4)
 
 
 def publish_p(ans: dict):
@@ -98,13 +121,13 @@ def publish_p(ans: dict):
 
 
 def composite(ans: dict):
-    """min(face_visible, eyes_to_camera) x pose weight — a ranking number we compute ourselves."""
+    """min(face_visible, eyes_to_camera) x pose weight x the obstruction factor — ours, not the model's."""
     face = (ans.get("face_visible") or {}).get("noul")
     eyes = (ans.get("eyes_to_camera") or {}).get("noul")
     pose = (ans.get("pose") or {}).get("choice")
     if face is None or eyes is None:
         return None
-    return round(min(face, eyes) * POSE_WEIGHT.get(pose, 0.5), 4)
+    return round(min(face, eyes) * POSE_WEIGHT.get(pose, 0.5) * obstruction_factor(ans), 4)
 
 
 def candidate_spread(rows: list, floor: float = None) -> dict:

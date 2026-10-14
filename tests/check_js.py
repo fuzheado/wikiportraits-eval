@@ -38,6 +38,7 @@ import reports  # noqa: E402
 shared = {
     "CANDIDATE_WINDOW": reports.CANDIDATE_WINDOW,
     "CANDIDATE_FLOOR_RATIO": reports.CANDIDATE_FLOOR_RATIO,
+    "SCALE_EXPONENT": reports.SCALE_EXPONENT,
 }
 bad = []
 for name, value in shared.items():

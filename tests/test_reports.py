@@ -65,6 +65,17 @@ def item(title, pageid, a, thumb_file=None, status="done"):
 print("composite / publish / spread:")
 a = answers()
 ok(wiclient.composite(a) == round(min(0.97, 0.76) * 1.0, 4), "composite = min(face, eyes) x pose weight")
+# The obstruction factor: a face fully covered by a held object keeps OBSTRUCTION_FLOOR of its score,
+# a clear face keeps all of it, and an answer set that predates the question is untouched (never
+# silently demoted) — that last case is why this fixture has no `face_unobstructed` at all.
+assert wiclient.obstruction_factor({}) == 1.0, "a missing answer must not be a penalty"
+assert wiclient.obstruction_factor({"face_unobstructed": {"noul": 1.0}}) == 1.0
+assert wiclient.obstruction_factor({"face_unobstructed": {"noul": 0.0}}) == wiclient.OBSTRUCTION_FLOOR
+half = dict(a, face_unobstructed={"noul": 0.0})
+ok(wiclient.composite(half) == round(wiclient.composite(a) * wiclient.OBSTRUCTION_FLOOR, 4),
+   "a microphone in front of the face demotes the composite, and does not disqualify it")
+ok(wiclient.obstruction_factor({"face_unobstructed": {"noul": 9.0}}) == 1.0,
+   "an out-of-range answer is clamped, not trusted")
 ok(wiclient.composite(answers(pose="group")) == round(0.76 * 0.25, 4), "group pose is weighted down")
 ok(wiclient.composite(answers(pose="weird_pose")) == round(0.76 * 0.5, 4), "unknown pose falls back to 0.5")
 ok(wiclient.publish_p(a) == 0.88, "publish_p reads the publish option")

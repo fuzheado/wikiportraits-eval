@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **docs/PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.19.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.20.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -54,6 +54,9 @@ python3 tests/test_ui_contract.py [URL]  # live, but free when the files are alr
 WANT=4 python3 tools/live_pipeline_check.py [URL]   # live and costs 1 call per fresh file (+1 pre-flight probe, cached 10 min)
 python3 tools/verify_live_two.py [URL]         # live: 1 cached + 1 fresh photo end to end, all four reports (+1 probe)
 python3 tools/probe_latency_now.py             # live and costs 4 calls (2 text-only, 2 image)
+python3 tools/probe_obstruction.py            # live: 1 call per photo — does the model actually SEE
+                                             # a microphone? prints P(face unobstructed) next to the
+                                             # pictures, which it also writes to /tmp/obstruction/
 python3 tools/probe_concurrency.py             # live: serial vs N streams — per-call latency, throughput,
                                          # drift check; run it IN THE POD (see §7.1) or via the tunnel
 python3 tools/probe_inflight_pacing.py         # offline, zero API calls: proves when INFLIGHT>1 does anything
@@ -143,10 +146,21 @@ UI changes.**
    (`PARSE_MAX`). Do not "simplify" any of these: each one closes a named hole
    (SSRF-via-userinfo, oversized media, unbounded memory/queue).
 9. **The composite is our arithmetic, not the model's.** `min(face_visible, eyes_to_camera) × pose
-   weight` is computed in `wiclient.composite()` and must be labelled as ours everywhere it appears —
+   weight × unobstructed` is computed in `wiclient.composite()` and must be labelled as ours
+   everywhere it appears —
    the UI row, the About panel, the report method block, the README. Never present it as a model
    probability: that would make the number unattributable, which is the one thing this app is built
    not to do. `P(publish)` and `P(infobox)` are the model's own and are always shown beside it.
+   **The unobstructed factor is its own question, not a rewording of `face_visible`, and that is why
+   it works:** the model reads "is the face clearly visible and unobstructed" as *can I see the face*,
+   which a microphone over the mouth does not prevent — the eyes stay perfectly visible, so a
+   mic-holding performer scored 0.83. Asked directly, the same photo answers 0.14. Measured
+   2026-10-14 on the disagreements: a podcast boom mic at the mouth → 0.39 (correct), a speaker with
+   the mic bank down at desk level → 0.97 (correct). `obstruction_factor()` returns **1.0 when the
+   answer is absent**, so an older answer set or a test fixture means "not known" rather than being
+   silently demoted; at worst it scales by `OBSTRUCTION_FLOOR` (0.5), so the effect is bounded,
+   attributable, and never disqualifying. Adding the question changed the schema hash and therefore
+   invalidated every cached answer — by design, as with `publish_ready` in October 2026.
 10. **Report candidate spread, never standard deviation.** sd rises whenever answers pile up at either
    end, *including at the ceiling*, so it rewards exactly the failure we already measured (rewrites
    that pushed every portrait to 0.81-0.96 and shrank the range between them from 0.486 to 0.021).
