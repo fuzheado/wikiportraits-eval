@@ -356,7 +356,7 @@ python3 tests/check_js.py          # the inline script still parses (offline)
 python3 tests/check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
 python3 tools/probe_inflight_pacing.py         # offline, 0 API calls: proves when INFLIGHT>1 does anything
 .venv-pdf/bin/python tests/test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
-node tests/test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
+node tests/test_render_dom.js      # the results list, ranking and spread in a DOM (needs `cd tests && npm install`)
 python3 tests/test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content
 WANT=4 python3 tools/live_pipeline_check.py [URL]   # live: pipeline, states, latency on fresh files
 python3 tools/verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports inspected

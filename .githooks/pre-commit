@@ -33,18 +33,18 @@ for t in tests/test_forms.py tests/test_commas.py tests/test_wsgi.py tests/test_
   fi
 done
 
-# the DOM test needs jsdom. It need not live in this directory — node walks parent directories when
-# resolving — so ask node whether it can resolve jsdom rather than looking for a local node_modules
-# (looking for the directory silently skipped a test that was passing).
+# the DOM test needs jsdom, which lives in tests/ with its package.json. Ask node from THERE rather
+# than looking for a node_modules directory: looking for the directory once silently skipped a test
+# that was passing.
 if command -v node >/dev/null 2>&1; then
-  if node -e "require.resolve('jsdom')" >/dev/null 2>&1; then
+  if (cd tests && node -e "require.resolve('jsdom')") >/dev/null 2>&1; then
     if ! out=$(node tests/test_render_dom.js 2>&1); then
       echo "pre-commit: test_render_dom.js FAILED"
       printf '%s\n' "$out" | tail -20
       fail=1
     fi
   else
-    echo "pre-commit: skipping test_render_dom.js — jsdom not resolvable (run: npm install)"
+    echo "pre-commit: skipping test_render_dom.js — jsdom not resolvable (run: cd tests && npm install)"
   fi
 fi
 

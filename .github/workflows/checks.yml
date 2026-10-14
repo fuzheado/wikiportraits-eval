@@ -57,6 +57,7 @@ jobs:
         with:
           node-version: "20"
       - name: install jsdom
+        working-directory: tests
         run: npm install
       - name: run the DOM test
         run: node tests/test_render_dom.js

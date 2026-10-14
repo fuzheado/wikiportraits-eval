@@ -46,7 +46,7 @@ python3 tests/test_forms.py tests/test_commas.py tests/test_wsgi.py tests/test_p
 python3 tests/check_js.py                # offline: the page script parses (node --check)
 python3 tests/check_compat.py            # offline: nothing newer than the advertised 3.9 floor
 python3 tests/check_docs.py tests/check_memo_refs.py  # offline: docs exist & cite real files (free)
-node tests/test_render_dom.js            # offline (needs `npm install` once — jsdom, ~25 MB)
+node tests/test_render_dom.js            # offline (needs `cd tests && npm install` once — jsdom)
 .venv-pdf/bin/python tests/test_pdf_images.py       # renders a PDF back to PNG for eyeballing
                                                     # (.venv-pdf: python3 -m venv .venv-pdf && .venv-pdf/bin/pip install pypdfium2 pypdf)
 python3 tools/verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports, PDF rendered
@@ -538,8 +538,11 @@ and a public tool should not be the thing that load-tests it.
 ## 8. Loose ends
 
 - Category input is unimplemented (warned about in the UI, not silently ignored).
-- The dev host has a 25 MB `node_modules` (jsdom) for the DOM test; it is **excluded** from the
-  deploy tarball. Run `npm install` if you need the test.
+- `tests/package.json` and its `node_modules` exist only for the DOM test (jsdom), and
+  `tools/package.sh` excludes the `node_modules`. Run **`cd tests && npm install`** if you need the
+  test. The package.json is in `tests/` **deliberately**: the Toolforge Build Service engages the
+  Node buildpack whenever one sits at the app root, which was adding a **200 MB Node runtime layer**
+  to a stdlib-Python image for a dependency the running app never uses (§6, measured 2026-10-14).
 - `tools/probe_thumb_ladder.py` is the thumbnail-ladder canary (§12): it shows what `iiurlwidth=N`
 actually serves, for any file, from cache on re-runs. Run it when a width-related number looks wrong.
 
@@ -629,7 +632,7 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
 | The list ordering looks wrong | it is ranked by the composite by design; `rankOf()` in `static/index.html` is the key, `reports.ranked()` the server-side equivalent |
 | "Score them" finishes instantly / every row says cached | working as designed — those answers are saved. Tick **run fresh** to actually call the model (one call per photo) |
 | The page cleared your results without asking first | it should ask whenever there was something to lose (`askNewRun()` in `static/index.html`); a silent clear is a bug — check `hasResults()` |
-| `jsdom is not installed` | `npm install` (dev-only dependency) |
+| `jsdom is not installed` | `cd tests && npm install` (dev-only dependency) |
 
 ## 11. Question design: the "infobox ready" experiment (2026-10-13)
 

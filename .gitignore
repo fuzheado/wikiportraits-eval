@@ -2,6 +2,10 @@
 cache/
 serve/
 node_modules/
+# no lockfile: the only npm dependency is jsdom, used solely by tests/test_render_dom.js, and
+# the repo is deliberately stdlib-Python-only otherwise. Pinning 40 transitive packages for one
+# dev-only test is more maintenance than it buys. `npm install` still works.
+package-lock.json
 .venv-pdf/
 __pycache__/
 *.pyc
