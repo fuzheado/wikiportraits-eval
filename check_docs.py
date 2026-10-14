@@ -3,6 +3,7 @@
 import os
 import re
 import sys
+from typing import Optional
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DOCS = ["PRD.md", "README.md", "HANDOFF.md"]
@@ -18,7 +19,7 @@ for d in DOCS:
         continue
     print(f"{d:12s} {os.path.getsize(p):>6d} bytes  {len(open(p).read().splitlines()):>4d} lines")
 
-def resolves(tok: str) -> str | None:
+def resolves(tok: str) -> Optional[str]:
     """Return the path a doc reference resolves to, or None."""
     if tok in UPSTREAM:
         return UPSTREAM[tok] if os.path.exists(UPSTREAM[tok]) else None

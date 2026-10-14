@@ -1,0 +1,113 @@
+Wikitech: Machine Learning/LiftWing/Large Language Models — rate limits, access and the
+published benchmark
+
+Source: https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models
+Retrieved: 2026-10-14 (verbatim wikitext of the two sections below, from
+`action=parse&prop=wikitext`; mediawiki markup left intact on purpose so it can be diffed against
+the live page later).
+
+Why it is kept here: the rate-limit table decides which regime this app runs in (Toolforge =
+"known network" = effectively unlimited; a laptop = anonymous = a shared 100 req/h), and HANDOFF
+§5/§13 and the README quote it. A dated copy means a change upstream is visible as a diff rather
+than discovered as a surprise.
+
+Re-fetch with:
+  curl -A "$WIKIMEDIA_USER_AGENT" 'https://wikitech.wikimedia.org/w/api.php?action=parse&page=\
+  Machine_Learning%2FLiftWing%2FLarge_Language_Models&prop=wikitext&format=json&formatversion=2'
+
+---8<--- SECTION 1: RATE LIMITS & ACCESS ------------------------------------------
+
+== Rate Limits & Access ==
+
+Public <code>llm-*</code> endpoints are governed by the '''LiftWingLLM''' rate-limit policy in the REST Gateway ([[phab:T426749|T426749]]). It is a coarse, interim limit until cost/token-based limiting lands.
+
+{| class="wikitable"
+! Client class !! Limit !! Who
+|-
+| Public / anonymous || '''100 / hour''' || Anonymous, user-agent-only, and authenticated users. Shared per-client budget across ''all'' <code>llm-*</code> models.
+|-
+| Known network || Effectively unlimited || WMCS — Cloud VPS and Toolforge (CDN <code>x-trusted-request: A</code>).
+|-
+| Known client || Effectively unlimited || Networks associated with a known client (<code>x-trusted-request: B</code>).
+|-
+| Approved bot || Effectively unlimited || Community-approved bots (JWT auth).
+|}
+
+=== Access & sign-in by platform ===
+
+{| class="wikitable"
+! Platform !! How to access !! Sign-in / authentication
+|-
+| [[#LiftWing Studio|LiftWing Studio]] || Browser chat UI at [https://liftwing-studio.wmcloud.org/ liftwing-studio.wmcloud.org] || Register an account; usable after '''admin approval'''.
+|-
+| Public API || OpenAI-compatible endpoint at <code>api.wikimedia.org</code> || '''No API key''' — open to anonymous requests, subject to the shared 100 req/hour limit above. Run from Toolforge/WMCS for the higher tier.
+|-
+| Internal endpoint || Production-network / in-cluster only || Not publicly reachable; for internal WMF services and clients.
+|}
+
+{{Note|1=Because LiftWing Studio runs on Cloud VPS (a known network), Studio requests use the effectively-unlimited tier rather than the public 100 req/hour cap. The gateway sees Studio as a single WMCS client rather than individual users, so any per-user limits are managed within Studio itself.}}
+
+=== Accessing from Toolforge (higher rate limit) ===
+
+Running from '''Toolforge''' is the recommended way to get the higher rate limit. Toolforge is part of WMCS, so its egress traffic is classified as a ''known network'' and the shared 100 req/hour cap is lifted to effectively unlimited — no API key or extra configuration required. For a quick call you don't need to build anything; step 1 is one-time.
+
+'''1. Create a Wikimedia developer account and join Toolforge.''' If you don't have one, create a developer account and request Toolforge membership — the [[Help:Toolforge/Quickstart|Toolforge Quickstart]] covers both in a few minutes.
+
+'''2. Log in to the Toolforge bastion:'''
+<syntaxhighlight lang="bash">
+ssh <your-username>@login.toolforge.org
+</syntaxhighlight>
+
+'''3. Call the model.''' Run the same request you would anywhere — because it now egresses through Toolforge, it automatically gets the higher rate limit:
+<syntaxhighlight lang="bash">
+curl https://api.wikimedia.org/service/lw/inference/v1/models/llm-qwen3-14b/openai/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llm-qwen3-14b", "messages": [{"role": "user", "content": "Hello from Toolforge!"}]}'
+</syntaxhighlight>
+
+{{Note|1='''Building a tool or application?''' The bastion is for quick, interactive use. For anything sustained — a running service, scheduled jobs, or a shared project — create a dedicated [[Help:Toolforge/Tool accounts#Create a new tool account / tool|tool account]] and run your code there via the [[Help:Toolforge/Jobs framework|jobs framework]] or a [[Help:Toolforge/Web|web service]].}}
+
+Becoming a '''known client''' or a community-approved '''bot''' (JWT auth) also lifts the limit — contact the ML team (see [[#Onboarding, Report Issues & Get Help|below]]) if your use case needs it.
+
+---8<--- SECTION 2: PERFORMANCE & BENCHMARKING -----------------------------------
+
+== Performance ==
+
+=== Observability ===
+
+GPU and vLLM serving metrics are collected in Grafana. The work-in-progress '''ML infrastructure dashboard''' covers two layers — infrastructure (GPU compute & capacity, VRAM, system metrics) and service (Kubernetes deployments, vLLM). All LLM inference services now emit vLLM Prometheus metrics ([[phab:T431136|T431136]]).
+
+{| class="wikitable"
+|-
+! ML infra dashboard
+| [https://grafana.wikimedia.org/d/dpzzsnh/ml-infra grafana.wikimedia.org/d/dpzzsnh/ml-infra] ''(WIP)''
+|-
+! Progress tracking
+| [[phab:T429597|T429597 — LLM observability]]
+|}
+
+=== Benchmarking ===
+
+An initial performance baseline has been recorded for <code>llm-qwen36-27b</code> (FP8) on the internal endpoint, measured with [https://github.com/vllm-project/vllm-bench vllm-bench].
+
+
+{| class="wikitable"
+|+ llm-qwen36-27b (FP8) — internal endpoint, single replica (2026-07-17)
+! Concurrency !! Req/s !! Output tok/s !! TTFT p50 (ms) !! TTFT p99 (ms) !! E2EL p50 (ms) !! E2EL p99 (ms) !! Failures
+|-
+| 1 || 0.37 || 35 || 197 || 435 || 3,614 || 3,650 || 0
+|-
+| 8 || 1.90 || 179 || 255 || 1,225 || 5,270 || 6,270 || 0
+|-
+| 32 || 3.63 || 349 || 730 || 4,798 || 10,342 || 12,393 || 0
+|-
+| 64 || 4.24 || 413 || 3,729 || 9,401 || 18,125 || 19,845 || 0
+|}
+
+Key takeaways:
+* Single-stream (concurrency 1): ~197 ms to first token, ~35 output tokens/s, ~3.6 s for a 128-token response.
+* Throughput saturates around concurrency 64 (~410 output tok/s, ~4.2 req/s); scaling is sub-linear beyond ~8–16, and latency rises sharply under load (end-to-end p50 3.6 s → 18 s).
+* No failed requests across the sweep.
+* Capacity is added by scaling out replicas (horizontal scaling), not by pushing a single replica harder.
+
+This is a single-replica, internal-endpoint baseline on a synthetic fixed-length workload; public-endpoint and additional-model (e.g. <code>llm-qwen3-14b</code>) results will follow, along with comparisons across GPU-partitioning changes. Full procedure, wrapper script, and raw results live in <code>benchmarks/</code> in the [https://gerrit.wikimedia.org/g/machinelearning/liftwing/inference-services inference-services] repository; metric definitions follow [[phab:T431554|T431554]]; further benchmarking and load-testing work is tracked in [[phab:T431851|T431851]].

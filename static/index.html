@@ -100,6 +100,7 @@
   .overlay.hidden{display:none}
   .modal{background:#fff;border-radius:12px;max-width:920px;width:100%;padding:18px 20px 28px;
          box-shadow:0 18px 50px rgba(9,17,30,.35)}
+  .modal.narrow{max-width:560px}
   .modal h3{font-size:14px;margin:20px 0 6px;color:var(--ink)}
   .modal p,.modal li{font-size:13.5px;line-height:1.55}
   .modal pre{background:#f5f7fa;border:1px solid var(--line);border-radius:8px;padding:10px;
@@ -131,19 +132,33 @@
   </div>
 </div>
 
+<div id="confirm-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+  <div class="modal narrow">
+    <div class="row"><h2 id="confirm-title" style="margin:0">Start a new run?</h2>
+      <span class="grow"></span>
+      <button id="confirm-x" title="Keep what is on screen">Cancel ✕</button></div>
+    <p id="confirm-body" style="margin:12px 0 0">Running another job will clear the previous run's
+      results. Make sure you have saved any desired outputs. Are you sure you want to do this?</p>
+    <div class="row" style="margin-top:16px">
+      <span class="grow"></span>
+      <button id="confirm-cancel">Cancel</button>
+      <button id="confirm-yes" class="primary">Yes, start over</button></div>
+  </div>
+</div>
+
 <main>
   <div class="card">
     <h2>1 · Paste your list of images</h2>
     <label>One per line — filenames, <code>File:</code> titles, Commons/upload/thumb URLs or
       wikitext, mixed freely <span class="meter">(full rules &amp; accepted formats: <b>About</b>,
       section 2)</span></label>
-    <textarea id="input" spellcheck="false">Foo.jpg
-File:Foo.jpg
-https://commons.wikimedia.org/wiki/File:Foo.jpg
-https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</textarea>
+    <textarea id="input" spellcheck="false" placeholder="one image per line — the example list loads in a moment"></textarea>
     <div class="row" style="margin-top:10px">
       <button id="check" class="primary">Check inputs</button>
       <button id="run" disabled>Score them</button>
+      <label class="meter" id="nocache-label" style="display:flex;align-items:center;gap:6px"
+        title="Ignore answers already saved on this server and call the model for every photo, so the speed you see is a real run. Costs one call per photo (the hourly budget still applies).">
+        <input type="checkbox" id="nocache"> run fresh (ignore saved answers)</label>
       <span id="parseinfo" class="pill">nothing checked yet</span>
       <span class="grow"></span>
       <span id="budget" class="meter">budget: —</span>
@@ -164,6 +179,7 @@ https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</textarea>
     <div class="row"><span id="counts" class="meter">0 / 0</span><span class="grow"></span>
       <span id="timing" class="meter"></span></div>
     <div id="latency" class="meter" style="margin-top:6px"></div>
+    <div id="freshness" class="meter" style="margin-top:6px"></div>
     <div id="probe" class="meter" style="margin-top:6px"></div>
     <div id="spread" class="meter" style="margin-top:6px"></div>
     <div id="stats" class="grid" style="margin-top:14px"></div>
@@ -196,6 +212,25 @@ let aboutCache = null;
 
 const fmt = (v, n = 3) => (v === null || v === undefined) ? "—" : Number(v).toFixed(n);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// The budget counter lives in the server process, and every model call is made by that server (never
+// by a browser), so it counts the whole tool's usage rather than one visitor's. It also resets on
+// restart while the endpoint's own quota does not — so the label says *since when* it has counted,
+// instead of reading like a fact about the endpoint.
+function setBudget(b, extra) {
+  const el = $("budget");
+  el.title = "Every model call is made by this server, so this counts the whole tool's usage, not "
+    + "one browser's. The counter lives in the server process and resets when the server restarts; "
+    + "the endpoint's own quota does not.";
+  if (!b) { el.textContent = "budget: —"; return; }
+  const since = b.counting_since
+    ? ` since ${new Date(b.counting_since * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+    : "";
+  el.textContent = (b.blocked_for_s > 0
+    ? `rate limited — ${Math.ceil(b.blocked_for_s)}s cooldown (budget ${b.used_last_hour}/${b.limit_per_hour} this hour)`
+    : `budget: ${b.used_last_hour}/${b.limit_per_hour} calls this hour${since}`)
+    + (extra ? ` · ${extra}` : "");
+}
 
 function bar(label, p, note) {
   const pct = Math.max(0, Math.min(1, p ?? 0)) * 100;
@@ -469,6 +504,11 @@ function renderJob(job) {
       + (allCached ? ` · from cached results, measured earlier` : "")
       + (L.verdict === "normal" ? "" : `<br>${esc(L.note || "")}`);
   }
+  const fresh = doneItems.filter(i => !i.from_cache).length;
+  $("freshness").innerHTML = job.no_cache
+    ? `<span class="warn">cache bypassed — scoring fresh</span> · ${fresh} of ${doneItems.length}`
+      + ` finished photo${doneItems.length === 1 ? "" : "s"} cost a model call`
+    : "";
   // incremental list: rows are created once and patched in place, so the thumbnails never reload.
   // Done photos are ordered by the composite (rank shown), anything still running keeps its place
   // below them.
@@ -500,12 +540,7 @@ function renderJob(job) {
         in ${fmt(pr.wall_s, 2)}s; the run stopped before spending the queue</span>`;
   const logTxt = (job.log || []).join("\n");
   if ($("log").textContent !== logTxt) $("log").textContent = logTxt;
-  if (job.budget) {
-    const b = job.budget;
-    $("budget").textContent = b.blocked_for_s > 0
-      ? `rate limited — ${Math.ceil(b.blocked_for_s)}s cooldown (budget ${b.used_last_hour}/${b.limit_per_hour} this hour)`
-      : `budget: ${b.used_last_hour}/${b.limit_per_hour} calls this hour`;
-  }
+  if (job.budget) setBudget(job.budget);
   const any = (job.items || []).some(i => i.status === "done");
   ["dl-md", "dl-json", "dl-csv", "dl-pdf"].forEach(id => $(id).disabled = !any);
   if (job.status === "done" || job.status === "error") {
@@ -558,9 +593,85 @@ function hideAbout() { $("about-overlay").classList.add("hidden"); }
 $("about-open").onclick = showAbout;
 $("about-close").onclick = hideAbout;
 $("about-overlay").addEventListener("click", (e) => { if (e.target === $("about-overlay")) hideAbout(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideAbout(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("confirm-overlay").classList.contains("hidden")) { answerConfirm(false); return; }
+  hideAbout();
+});
+
+// ---- starting a new run: clear the previous one, but ask first ----------------------
+// A finished run's cards, stats, spread, chart and download buttons all describe the *old* list, so
+// leaving them beside fresh progress is worse than showing nothing. Discard them deliberately, and
+// only ask when there is actually something to lose.
+let confirmResolver = null;
+
+function hasResults() { return !!(jobId || lastJob || rows.size); }
+function runInProgress() {
+  return !!(lastJob && (lastJob.status === "queued" || lastJob.status === "running"));
+}
+
+function clearResults() {
+  jobId = null; lastJob = null; lastLatency = null;
+  if (timer) { clearInterval(timer); timer = null; }
+  for (const [, row] of rows) row.el.remove();
+  rows.clear();
+  clockStarts.clear();
+  const box = $("items");
+  while (box.firstChild) box.removeChild(box.firstChild);   // DOM API only — never innerHTML here
+  ["latency", "probe", "freshness", "spread", "stats", "chart", "log"].forEach(id => {
+    const el = $(id); if (el) el.innerHTML = "";
+  });
+  $("timing").textContent = "";
+  $("counts").textContent = "0 / 0";
+  $("bar").style.width = "0%";
+  $("jobstate").textContent = "idle";
+  ["md", "json", "csv", "pdf"].forEach(f => $("dl-" + f).disabled = true);
+  $("chartsizerow").hidden = true;
+  $("run").disabled = true;
+}
+
+// the resolved-inputs table belongs to the list that was just checked, so a new check clears it too
+function clearAll() {
+  clearResults();
+  $("parsedbody").innerHTML = "";
+  $("warnings").innerHTML = "";
+  $("parseinfo").textContent = "nothing checked yet";
+  $("parsedsummary").textContent = "resolved inputs";
+}
+
+function askConfirm() {
+  return new Promise((resolve) => {
+    confirmResolver = resolve;
+    $("confirm-overlay").classList.remove("hidden");
+    $("confirm-yes").focus();
+  });
+}
+function answerConfirm(v) {
+  $("confirm-overlay").classList.add("hidden");
+  const r = confirmResolver;
+  confirmResolver = null;
+  if (r) r(v);
+}
+async function askNewRun() {
+  if (!hasResults()) return true;
+  $("confirm-body").textContent = runInProgress()
+    ? "A run is still in progress. Starting a new one clears these results from the page — the run "
+      + "itself keeps going on the server and answers already fetched are still cached. Make sure "
+      + "you have saved any desired outputs. Are you sure you want to do this?"
+    : "Running another job will clear the previous run's results. Make sure you have saved any "
+      + "desired outputs. Are you sure you want to do this?";
+  return askConfirm();
+}
+$("confirm-yes").onclick = () => answerConfirm(true);
+$("confirm-cancel").onclick = () => answerConfirm(false);
+$("confirm-x").onclick = () => answerConfirm(false);
+$("confirm-overlay").addEventListener("click", (e) => {
+  if (e.target === $("confirm-overlay")) answerConfirm(false);
+});
 
 $("check").onclick = async () => {
+  if (!(await askNewRun())) return;
+  clearAll();
   $("check").disabled = true;
   $("parseinfo").textContent = "checking…";
   try {
@@ -582,16 +693,14 @@ $("check").onclick = async () => {
 };
 
 $("run").onclick = async () => {
+  if (!(await askNewRun())) return;      // the previous run's cards are about to be discarded
+  clearResults();
   $("run").disabled = true; $("check").disabled = true;
   const r = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: $("input").value }) });
+    body: JSON.stringify({ text: $("input").value, no_cache: $("nocache").checked }) });
   const d = await r.json();
   if (!r.ok) { $("jobstate").textContent = d.error || "could not start"; $("run").disabled = false; $("check").disabled = false; return; }
   jobId = d.job_id;
-  for (const [, row] of rows) row.el.remove();
-  rows.clear();
-  lastLatency = null;
-  $("latency").innerHTML = "";
   clearInterval(timer); timer = setInterval(poll, 1000); poll();
 };
 
@@ -600,8 +709,15 @@ $("run").onclick = async () => {
 });
 
 fetch("/api/config").then(r => r.json()).then(c => {
-  $("budget").textContent = `budget: ${c.budget.used_last_hour}/${c.budget.limit_per_hour} calls this hour · `
-    + `${c.cache_entries} cached results · pacing ${c.spacing_s}s`;
+  setBudget(c.budget, `${c.cache_entries} cached results · pacing ${c.spacing_s}s`);
+}).catch(() => {});
+
+// The starter list lives in default_list.txt at the repo root, so it can be swapped for a real
+// event's file list without touching code. Fill the box once, never over anything already typed.
+fetch("/api/default-list").then(r => r.json()).then(d => {
+  if (d && typeof d.text === "string" && d.text.trim() && !$("input").value.trim()) {
+    $("input").value = d.text;
+  }
 }).catch(() => {});
 </script>
 </body>

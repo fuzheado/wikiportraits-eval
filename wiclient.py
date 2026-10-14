@@ -11,7 +11,13 @@ UA = os.environ.get(
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 LIFTWING = ("https://api.wikimedia.org/service/lw/inference/v1/models/"
             "llm-clef-flash:predict")
-THUMB_WIDTH = int(os.environ.get("THUMB_WIDTH", "640"))   # server downscales to 640 anyway
+# Commons enforces `$wgThumbnailSteps` and quantises `iiurlwidth` UPWARD to the next step, while
+# `imageinfo.thumbwidth` echoes the *request* back instead of describing the file (T388792). So a
+# requested width only means something if it names a real step — 640 is not one, and a 640 request
+# silently downloads the 960 asset. Ask for the step, and read the served width from the URL.
+THUMB_LADDER = (20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840)
+MODEL_MAX_WIDTH = 640        # the vision encoder normalises to this width, whatever you send
+THUMB_WIDTH = int(os.environ.get("THUMB_WIDTH", "960"))   # must be a THUMB_LADDER step
 SPACING = float(os.environ.get("SPACING", "0.9"))          # seconds between scoring calls
 
 STATE = ("WikiPortraits photograph of a public figure, taken by a volunteer photographer at an "
@@ -119,6 +125,10 @@ class Budget:
         self.blocked_until = 0.0
         self.last_429 = None
         self.lock = threading.Lock()
+        # when this counter started. The list is in memory only, so a server restart silently resets
+        # the count while the endpoint's own per-client quota does not — hence `counting_since` in
+        # status(): the UI reports "N since HH:MM" instead of implying a fact about the world.
+        self.started = time.time()
 
     def note_call(self):
         with self.lock:
@@ -140,6 +150,7 @@ class Budget:
 
     def status(self):
         return {"used_last_hour": self.used(), "limit_per_hour": self.limit,
+                "counting_since": self.started,
                 "blocked_for_s": round(self.wait_seconds(), 1), "last_429": self.last_429}
 
 
@@ -396,6 +407,20 @@ def _project_from_upload_path(path: str) -> str:
     return "commons.wikimedia.org"
 
 
+def served_width_from_url(url):
+    """The width in the `/960px-` segment of a thumburl — i.e. the rendition that exists.
+
+    `imageinfo.thumbwidth` cannot be used for this: it echoes the *request*, so a 640 request
+    reports 640 while the bytes are 960 (T388792). The `/Npx-` segment of the URL we actually
+    fetched is authoritative, and the decoded bytes are the cross-check. Handles the multi-page
+    and video forms (`/page1-960px-X.pdf.jpg`, `/960px--X.webm.jpg`). Returns None when the URL
+    carries no size segment at all — which is what MediaWiki returns for an original smaller than
+    the request (it serves the original rather than upscaling).
+    """
+    m = re.search(r"/(?:page\d+-)?(\d+)px-", url or "")
+    return int(m.group(1)) if m else None
+
+
 def resolve(items: list, batch: int = 50) -> dict:
     """Resolve File: titles to metadata + a thumbnail URL, batched per wiki.
 
@@ -434,6 +459,8 @@ def resolve(items: list, batch: int = 50) -> dict:
                 out[key] = {"ok": True, "wiki": host, "pageid": page.get("pageid"), "title": t,
                             "thumburl": ii.get("thumburl"), "url": ii.get("url"),
                             "orig_w": ii.get("width"), "orig_h": ii.get("height"),
+                            "requested_w": THUMB_WIDTH,
+                            "served_w": served_width_from_url(ii.get("thumburl")),
                             "mime": ii.get("mime"), "sha1": ii.get("sha1"),
                             "timestamp": ii.get("timestamp"),
                             "license": em.get("LicenseShortName", {}).get("value", ""),

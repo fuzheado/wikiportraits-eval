@@ -5,6 +5,10 @@
 with it, and how to check your port works.
 **Date:** 2026-10-13. **App version:** `0.4.1` (`APP_VERSION` in `core.py`).
 
+> **Updated 2026-10-14:** the latency bullet in §7 was re-dated and re-measured, and §9 was added —
+> the model service you depend on is brand new and is tracked on Phabricator as **T440223**. Nothing
+> else in this note changed; the v0.4.1 port instructions are unaffected.
+
 ---
 
 ## 0. Which version do you have?
@@ -190,9 +194,16 @@ keeps the Toolforge/WSGI path working without a build step.
   then hand labels) has **not been done**.
 - Percentile-within-run is still not built; only the rank is.
 - Category input, run persistence/comparison and a calibrated threshold are **not shipped**.
-- Endpoint latency is currently ~57 s/call, ≈105× the measured 0.54 s warm baseline, entirely
-  service-side (HTTP 200, no 429s) — it is not caused by the app, the image size or the prompt size,
-  and it is worth reporting to the LiftWing maintainers.
+- **Endpoint latency is not a property of this app, and it moves.** On 2026-10-13 it ran at
+  ~57 s/call (≈105× the measured 0.54 s warm baseline) and at ~28.6 s/call earlier the same day,
+  entirely service-side (HTTP 200, no 429s — so not caused by the app, the image size or the prompt
+  size). On **2026-10-14 12:39 UTC** it was back to a **0.42 s median** (text-only 0.36/0.22 s, image
+  0.45/0.42 s, all HTTP 200). Two orders of magnitude, twice, in 48 hours. The service is Cloudflare's
+  Clef on LiftWing, deployed under Phabricator **T440223** — still `Open, Needs Triage`, stated target
+  **< 1 s per image** — and this tool is probably its heaviest consumer. So: **date every latency
+  number**, re-measure with `probe_latency_now.py` before drawing a conclusion, and treat a slow hour
+  as information about the *service* rather than a bug to fix here. Do not add retries or raise
+  `INFLIGHT` to compensate. See §9.
 - A one-photo PDF can still spill its closing disclaimer onto a short second page.
 
 ---
@@ -204,3 +215,37 @@ versions restores the previous behaviour completely. Two things to know: the sch
 from the questions, so a reverted `wiclient.py` restores the old hash and makes any old
 `*-f8b8a6b259ac-*.json` cache entries valid again (if you kept them); and the thumbnail store under
 `cache/thumbs/` is additive, so it can be left in place or deleted safely.
+
+---
+
+## 9. The dependency you do not control: `T440223`
+
+Your port inherits a **very new** upstream service, and it is worth knowing that before you debug
+your own deployment.
+
+- **What it is:** **[T440223 — "Deploy an open-weight decision model for classification use cases"](https://phabricator.wikimedia.org/T440223)**
+  (`Open, Needs Triage`, Public) is the ML team's deployment ticket for exactly the model this app
+  calls — Cloudflare's **Clef** on LiftWing. Its description is the authoritative statement of the
+  decision-model shape this tool relies on: an input plus typed questions returning a probability per
+  option in **one forward pass, with no generated text**. That is why `output_tokens` is always 0.
+- **The service is still being adjusted**, and **this tool is probably its heaviest consumer**. A
+  200-photo run is 200 image-bearing calls. So a strange result on your port may be evidence about the
+  service rather than a fault in your port — and a change on their side (model build, image
+  preprocessing) can move the numbers without returning any error.
+- **The ticket states the target: under 1 second per image.** When latency is slow, that is the
+  yardstick — and the slowness is most likely *theirs*: on 2026-10-13 the same question with and
+  without an image took ~28-57 s, while on 2026-10-14 it was ~0.4 s. **Re-measure with
+  `probe_latency_now.py` (4 calls) before changing anything here**; if text-only is slow too, your
+  port is innocent.
+- **Known failure mode:** the ticket carries the server trace `EngineDeadError` →
+  "EngineCore encountered an issue" → the serving container's model module (that path is inside the
+  LiftWing container, not your repo) → `vllm.v1.engine` → **HTTP 500** on
+  `POST /v1/models/llm-clef-flash:predict`. If your runs die at the pre-flight probe, this is likely
+  why.
+- **Etiquette:** read it freely, but if you have a reproduction or a dated measurement, **post it
+  yourself under your own Wikimedia account** — do not have an agent comment, file or re-prioritise
+  on your behalf. (Read-only is the agent default for Phabricator.)
+
+**One caution for your cache:** the schema hash in the cache key covers *our* prompt changes, not
+*their* model changes. If a photo that was already scored ever comes back different from its cached
+answer, suspect the serving side first and check T440223.

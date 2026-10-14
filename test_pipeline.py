@@ -169,6 +169,40 @@ if missing_thumbs:
 if not all(os.path.exists(i["thumb_file"]) for i in job["items"] if i.get("thumb_file")):
     failures.append("a recorded thumbnail path does not exist on disk")
 
+# --- the cache: a repeat run is free, and `no_cache` re-scores on purpose --------------------
+# "run fresh" is a real feature (people want to feel the true run speed) and a real hazard: it costs
+# one model call per photo. Both halves are asserted here, offline.
+def model_calls():
+    return len([e for e in events if e[0] == "model_end"])
+
+
+repeat = core.new_job("\n".join(f"File:Test {n}.jpg" for n in range(1, N + 1)))
+JOB = repeat
+core.run_job(repeat)
+n_cached = len([i for i in repeat["items"] if i.get("from_cache")])
+spent_repeat = model_calls() - len(models)
+if n_cached != N or spent_repeat != 0:
+    failures.append(f"a repeat run should be fully cached and cost nothing: "
+                    f"cached={n_cached}/{N}, {spent_repeat} model calls")
+if repeat.get("no_cache"):
+    failures.append("a normal run must not set no_cache")
+
+before = model_calls()
+fresh = core.new_job("\n".join(f"File:Test {n}.jpg" for n in range(1, N + 1)), no_cache=True)
+JOB = fresh
+core.run_job(fresh)
+spent_fresh = model_calls() - before
+if spent_fresh != N:
+    failures.append(f"no_cache must re-score every photo: {spent_fresh} calls for {N} photos")
+if any(i.get("from_cache") for i in fresh["items"]):
+    failures.append("a no_cache run still reported items as from_cache")
+if not fresh.get("no_cache"):
+    failures.append("the no_cache flag was not recorded on the job")
+if not any("cache bypassed" in line for line in fresh["log"]):
+    failures.append("a no_cache run does not say so in the run log")
+
+print(f"cache             : repeat run {n_cached}/{N} cached with {spent_repeat} calls; "
+      f"no_cache re-scored all {N} ({spent_fresh} calls) in {fresh.get('elapsed_s')}s")
 print(f"mid-run snapshots : {snapshots}")
 print(f"downloads overlapping a model call: {overlaps}")
 print(f"latency summary  : {lat}")

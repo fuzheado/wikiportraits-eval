@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.5.1 · stdlib Python only · last full test pass 2026-10-13
+App version 0.6.0 · stdlib Python only · last full test pass 2026-10-14
 
 ---
 
@@ -16,12 +16,15 @@ App version 0.5.1 · stdlib Python only · last full test pass 2026-10-13
 | `wiclient.py` | input parsing → `File:` titles, per-wiki Commons API resolution, thumbnail fetch, model call, budget/pacing |
 | `reports.py`, `pdfmin.py` | Markdown/JSON/CSV/PDF output; `pdfmin.py` is a dependency-free PDF writer |
 | `static/index.html` | the whole UI: incremental list rendering, per-row clock, latency panel, About modal |
+| `default_list.txt` | the example list the page starts with — 12 real Commons photos, one `File:` title per line. Served by `/api/default-list`, read at request time, so **replacing the file changes the default for everyone** with no code change. No comment lines: `#` is part of a Commons filename and the parser would treat a comment as a photo name (`test_default_list.py` enforces this). |
+| `.githooks/pre-commit` | offline suites on every commit, plus `test_default_list.py --live` **only when `default_list.txt` is staged**. Enable per clone: `git config core.hooksPath .githooks`. Escape hatches: `SKIP_LIVE=1`, `SKIP_HOOKS=1`. |
+| `.github/workflows/checks.yml` | CI: the offline suites on Python 3.9 **and** 3.12 (3.9 is the advertised floor), the jsdom DOM test, and a **manual-only** job that verifies the starter list on Commons (1 API call, 0 model calls). |
 | `app.py` / `wsgi.py` | `http.server` backend / WSGI entry point for Toolforge's traditional backend |
 | `cache/` | scored results, keyed `wiki-pageid-sha1-schemahash-width.json`. Safe to delete. |
 | `cache/thumbs/` | the exact thumbnail bytes sent to the model, keyed `wiki-pageid-sha1.img` — what the reports embed. Safe to delete (reports then re-fetch from Commons). |
 | `research/` | the question-design experiment: `wording-experiment-2026-10-13.md` (write-up), `wording_experiment.jsonl` (every raw answer), `wording_comparison.png` (chart), `wording_experiment_output.txt` (console log) — plus `sample-report.pdf` / `sample-report.md` / `sample-report-page1.png`, a real report served by the running app over HTTP (one photo, so it can be inspected without running anything) |
 | `PRD.md`, `README.md` | product rationale; user-facing docs |
-| dev scripts | `run_all_tests.sh`, `live_pipeline_check.py`, `verify_reports_live.py`, `verify_live_two.py`, `diag_contract_job.py`, `test_pdf_images.py`, `probe_latency_now.py`, `probe_spread.py`, `analyze_*.py`, `tune_infobox_question.py`, `summarize_wording_experiment.py`, `make_wording_chart.py`, `restart_app.py`, `start_tunnel.py`, `check_docs.py`, `check_js.py`, `package.sh` |
+| dev scripts | `run_all_tests.sh`, `live_pipeline_check.py`, `verify_reports_live.py`, `verify_live_two.py`, `diag_contract_job.py`, `test_pdf_images.py`, `probe_latency_now.py`, `probe_spread.py`, `probe_thumb_ladder.py`, `analyze_*.py`, `tune_infobox_question.py`, `summarize_wording_experiment.py`, `make_wording_chart.py`, `restart_app.py`, `start_tunnel.py`, `check_docs.py`, `check_js.py`, `package.sh` |
 
 Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 restart_app.py`
 (kills by scanning `/proc` — this host has no `lsof`).
@@ -30,7 +33,7 @@ Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 resta
 
 ```bash
 bash run_all_tests.sh                    # everything below, in order
-python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py   # offline
+python3 test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py test_thumb_width.py test_default_list.py   # offline
 python3 check_js.py                      # offline: the page script parses (node --check)
 python3 check_docs.py check_memo_refs.py # offline: docs exist & cite real files (free)
 node test_render_dom.js                  # offline (needs `npm install` once — jsdom, ~25 MB)
@@ -41,9 +44,19 @@ python3 test_ui_contract.py [URL]        # live, but free when the files are alr
 WANT=4 python3 live_pipeline_check.py [URL]   # live and costs 1 call per fresh file (+1 pre-flight probe, cached 10 min)
 python3 verify_live_two.py [URL]         # live: 1 cached + 1 fresh photo end to end, all four reports (+1 probe)
 python3 probe_latency_now.py             # live and costs 4 calls (2 text-only, 2 image)
+python3 probe_thumb_ladder.py            # live once (~10 calls), free thereafter — raw responses
+                                         # cached in cache/ladder/; the ladder canary (see §12)
 python3 analyze_question_spread.py       # offline: spread of every question in the cache (free)
 python3 summarize_wording_experiment.py  # offline: table from research/wording_experiment.jsonl
 python3 tune_infobox_question.py         # live and costs 20 calls (~19 min at 57 s/call, ~1 min warm)
+python3 test_default_list.py --live      # live: 1 batched Commons call, 0 model calls, no scoring
+
+**Checks on commit and in CI.** `git config core.hooksPath .githooks` enables the pre-commit hook: it
+runs the offline suites always, and the live starter-list check **only when `default_list.txt` is
+staged** — a network check must never gate an unrelated commit on Wikimedia being up. CI
+(`.github/workflows/checks.yml`) makes the same split: the offline suites on Python 3.9 and 3.12 plus
+the jsdom test on every push, and the Commons check on `workflow_dispatch` only. Neither ever runs a
+scoring job, because that spends real quota on a service that is still new (§13).
 ```
 
 `test_render_dom.js` is the only real UI test: it runs the page script in jsdom and asserts the
@@ -68,10 +81,16 @@ UI changes.**
 3. **Never rebuild the results list with `innerHTML` on a poll.** It destroyed and re-created every
    row, so every `<img>` was re-fetched — the whole list flashed once a second. Rows are created once
    into a keyed `Map` (see `static/index.html`) and patched in place. `test_ui_contract.py` asserts
-   `$("items").innerHTML` does not appear in the JS.
-4. **Cache keys are `(wiki, pageid, sha1, schema_hash, thumb_width)`.** Pageids collide across
+   `$("items").innerHTML` does not appear in the JS. **That includes the new-run reset:**
+   `clearResults()` removes rows with `removeChild`, never by `innerHTML`, so clearing the list cannot
+   re-introduce the reload.
+4. **Cache keys are `(wiki, pageid, sha1, schema_hash, served_width)`.** Pageids collide across
    wikis; titles are renamed; SHA-1 catches file overwrites; the schema hash invalidates answers when
-   the questions change. Do not "simplify" this.
+   the questions change. The width is the **served** one (read from the thumburl), not the requested
+   one: Commons quantises `iiurlwidth` upward to a ladder step, so a 640 request and a 960 request
+   fetch the *same bytes* and must share one entry (§12). `served_w` is `None` for an original
+   smaller than the request, in which case the key falls back to `THUMB_WIDTH`. Do not "simplify"
+   this.
 5. **The About panel and the prompt are built from the same constants.** `about_payload()` in
    `core.py` interpolates `wiclient.STATE` / `wiclient.QUESTIONS`; `test_ui_contract.py` diffs the
    served payload against them field by field. If you edit the schema, the panel follows
@@ -80,7 +99,8 @@ UI changes.**
    the browser hotlinking result thumbnails (a deliberate bandwidth choice). If you add a proxy, mind
    the traffic.
 7. **429 means stop, not retry harder.** One retry after the server's own `retry-after`, then report.
-   No retry loops. `INFLIGHT` (default 2) workers are allowed within a run — but every call start
+   No retry loops. `INFLIGHT` workers are allowed within a run (default **1** = serial; v0.5.0
+   shipped 2, reverted in v0.5.1 pending the measurement in §7.1) — but every call start
    is reserved through `_next_slot()`, so starts stay SPACING apart *globally*: from the endpoint's
    point of view the app still looks like one well-paced client, and the budget caps the hour.
 8. **Input is hostile until proven Wikimedia.** Every URL goes through `wiclient._clean_host()`
@@ -133,13 +153,31 @@ fails the suite instead of shipping.
 - **A "better-looking" question can rank worse.** Every reworded variant emptied the 0.35–0.65 band
   and every one of them separated the real portraits *worse* than the wording users complained about.
   Always check the candidate range before proposing a wording change.
-- **The served thumbnail width is not the requested one.** Commons returns standard steps:
-  request 120→120, 320→330, 500→500, **640→960**, **1024→1280**. Always read the served size; do not
-  label a report from the request.
-- **The server downscales to 640 px wide** before the vision encoder, whatever you send. Requesting
-  1024 px costs ~40 % more bytes for identical tokens. Token counts are deterministic per aspect
-  ratio for this schema: 865 (16:9), 905 (3:2), 1,045 (1:1), 1,245 (2:3). `usage.output_tokens` is
-  always 0 — this model writes no text.
+- **The served thumbnail width is not the requested one — and `imageinfo.thumbwidth` lies too.**
+  Commons enforces `$wgThumbnailSteps = [20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840]` and
+  **quantises the request upward** to the next step. Measured on a 4024×6048 original
+  (`probe_thumb_ladder.py`): 120→120, 250→250, 320→330, 500→500, **600 / 640 / 800 / 960 → all the
+  same `960px-` asset**, 1024→1280. Two consequences. (a) `thumbwidth` **echoes the request**: a 640
+  request reports `thumbwidth: 640` while the bytes are 960×1443 (T388792). The only trustworthy
+  signals are the `/Npx-` segment of `thumburl` and the decoded bytes — never label from the request
+  *or* from `thumbwidth`. (b) Requests inside one bucket return the **same URL**, so
+  `THUMB_WIDTH=640` pays the 960 price: 510,421 B for the sample file vs 142,727 B for the 500 bucket
+  — **72 % fewer bytes for 27 % of the pixels**. The app already decodes the truth into `sent_px`;
+  `about_payload()["request"]["thumb_width"]` and `/api/config`'s `thumb_width_requested` are
+  request-side by design. Fix options: §12.
+- **The model server normalises width to 640 px**, whatever you send — and never upscales (a 300×197
+  original is sent as-is: 793 tokens). Evidence, free from the cache: `960×640 → 983`
+  `input_tokens` while `960×1440 → 1,323`, i.e. **2.25× the sent pixels for 1.35× the tokens** — the
+  count tracks the 640-wide geometry, not the bytes on the wire. So the requested width buys *no*
+  tokens: the 960 rendition we download is discarded by the encoder, and requesting 1280 costs 80 %
+  more bytes (916,726 vs 510,421) for an identical call. Token counts are deterministic per aspect
+  ratio for the **six-question** schema — exact, read off the cache: 983 (3:2), 1,023 (4:3), 1,123
+  (1:1), 1,323 (2:3); 16:9 would be 943 by the same arithmetic, but no 16:9 photo is cached, so that
+  one is inferred. The `865/905/1,045/1,245` table this file used to carry is the **five-question**
+  schema — DEVELOPER-NOTE-v0.4.1 §2 measured the added question at **+78 tokens** of instructions —
+  so the live count is *old table + 78*, which holds exactly on all three ratios the cache can check.
+  Diffing the two therefore looks like a 78-token model regression when nothing has changed: it is
+  the sixth question. `usage.output_tokens` is always 0; this model writes no text.
 - **`#` in a title silently truncates** (`File:X#1.jpg` → `File:X`). The parser truncates and warns.
 - **`Datei:`/`Fichier:`/`Archivo:` are not Commons aliases**; they belong to de/fr/es wikis.
   `upload.wikimedia.org/wikipedia/<project>/…` names the wiki in the path — resolve on that wiki.
@@ -149,6 +187,22 @@ fails the suite instead of shipping.
   "not applicable" rather than failing. **Never fabricate timings for old cache entries.**
 - **The 0.5 threshold is arbitrary.** Nothing scored above ~0.71 in any sample (24-photo batch:
   mean 0.361, max 0.707, 5 ≥ 0.5). Rank, don't threshold.
+- **`used_last_hour` is in-memory, and it is the whole deployment's number.** `Budget` and every job
+  live in the process, so a restart reports `0/100` while the endpoint's own quota for this client is
+  untouched — and on Toolforge the pod restarts for reasons you do not control (rollout, eviction,
+  node maintenance), not just `restart_app.py`. Because **every** model call is made by this server
+  (§6), the endpoint sees one client for all users, so this counter is the entire tool's usage rather
+  than one visitor's — which makes the reset more consequential, not less. Two things follow: (a) never
+  read the budget line as "the hour is unspent" after a deploy, and never fire a 200-photo batch on
+  that assumption; (b) the `100` is a **self-imposed** guard, not the endpoint's limit — WMCS traffic
+  is in LiftWing's *known network* tier — effectively unlimited (§13) — so the
+  real ceiling is not 100 and the binding protection is the 429 → stop path (§3.7), which
+  does not depend on this counter being right. The UI labels it "… since HH:MM" for exactly this
+  reason (`Budget.started`, surfaced as `counting_since`).
+- **A cached run measures nothing.** If every row says `from cache`, the elapsed time is the disk's,
+  not the model's. Tick **run fresh** (`no_cache: true` on `/api/run` and `/api/eval`) — it bypasses the
+  read side of the cache and re-scores every photo at one call each, with the hourly budget and
+  `SPACING` still enforced. Bypassed answers are written back, so the calls are not wasted.
 - **`quality` is defined only by its five legend labels** (0 unusable … 4 excellent) and by the
   640 px image the model actually sees. Do not describe it as a sharpness or lighting measurement.
 
@@ -158,9 +212,20 @@ Measured: warm calls (62 recorded, 2026-10-02 and 2026-10-12) had a **median of 
 case of 6.95 s. On **2026-10-13, 12:16–12:45 UTC**, 20 calls had a **median of 28.63 s** (range
 27.43–29.40), with no 429s; a text-only call took 27.8/29.0 s and the same question with an image
 28.7/28.6 s — so it is not the image, the download, the aspect ratio or this app. For context, the
-Wikitech page's only published benchmark (a different, larger model on vLLM) reports ~197 ms to
-first token and 3.6 s for a 128-token response, p50 18 s at concurrency 64, and the page states the
-platform is experimental with **no availability SLA**.
+Wikitech page's only published benchmark is for a **different, larger model on a different endpoint**
+— `llm-qwen36-27b` (FP8), *internal* endpoint, single replica, 2026-07-17 — and reports 197 ms to first
+token, 3.6 s end-to-end p50 at concurrency 1, and 18 s end-to-end p50 at concurrency 64. The page
+states the platform is experimental with **no availability SLA**, and that public-endpoint and
+per-model baselines "will follow". So there is no published baseline for `llm-clef-flash` itself: the
+0.54 s `BASELINE_WARM_S` in this repo is our own measurement, not a vendor figure.
+
+**This is not settled infrastructure — it is a brand-new service with its own ticket.**
+`llm-clef-flash` was deployed under Phabricator **T440223** (`Open, Needs Triage`, §13), where the
+stated target is **under 1 second per image**. On **2026-10-14 12:39 UTC** it met that: 0.36/0.22 s
+text-only, 0.45/0.42 s with an image, all HTTP 200 (`probe_latency_now.py`). So the 28-57 s episodes
+recorded here are the *service* missing its own target, not this app misbehaving — and equally, a run
+that is fast today is not evidence that this app got faster. **Read §13 before treating any latency
+number in this file as a property of the tool.**
 
 How the app handles it: every call records `wall_s` (total) and `ttfb_s` (time to first byte — the
 gateway holding the request) plus `x-envoy-upstream-service-time`, and `latency_summary()` labels the
@@ -169,7 +234,9 @@ verdict shows in the UI, the run log and the reports.
 
 **Before "fixing" a slow run: run `probe_latency_now.py` (4 calls) and check whether text-only is
 also slow.** If it is, the app is innocent — record the number and move on. Do not add retries or
-concurrency; you will only burn quota.
+concurrency. On the **dev host** that would burn a shared 100 req/h anonymous budget; on **Toolforge**
+the quota is lifted (§13), so the reason changes rather than disappears — the service is new (T440223)
+and a public tool should not be the thing that load-tests it.
 
 ## 6. Deployment state
 
@@ -189,7 +256,9 @@ concurrency; you will only burn quota.
   since then the endpoint has oscillated between ~0.3-0.5 s warm, ~5 s, and ~29-31 s per call
   (`service-side` verdict) — sometimes within the same hour, with text-only calls equally slow,
   so the app's pre-flight and verdict machinery are what make the run readable. The 5-photo live
-  runs, `/api/eval` and all four reports verified working on production.
+  runs, `/api/eval` and all four reports verified working on production. **2026-10-14 12:39 UTC:
+  healthy again — median 0.42 s, 4 calls, all HTTP 200** (`probe_latency_now.py`). The service is new
+  and still moving underneath us: **T440223**, `Open, Needs Triage`, target < 1 s per image (§13).
 - **Confirmed 2026-10-13: all model calls are server-side.** The LiftWing endpoint is referenced
   only in `wiclient.score_image()`/`probe_endpoint()`; a browser instrumented during a scored run
   contacted exactly two hosts (this app and `thumb.wikimedia.org` — the documented thumbnail
@@ -206,9 +275,10 @@ concurrency; you will only burn quota.
 - **The first thing to do on Toolforge (planned experiment):** run `probe_latency_now.py` from a
   Toolforge shell and compare with the same script from the development host — same client, same
   files, same minute, only the origin IP differs. This separates "inside the Wikimedia network is
-  faster" from "the endpoint is having a bad week". WMCS also lifts the quota (known clients:
-  200k req/h, and WMCS is exempt from the generic API rate limits) — that benefit is documented
-  and should show up as no more pacing.
+  faster" from "the endpoint is having a bad week". **The quota is not a concern there:** LiftWing's
+  `LiftWingLLM` policy rates the anonymous tier at a shared 100 req/h but classifies WMCS as a
+  *known network* — effectively unlimited (§13) — so the benefit should show up as no more pacing at
+  all. Do not read a fast Toolforge run as evidence that the endpoint got faster for everyone.
 - While testing, **do not restart the server** (`restart_app.py`) — someone may be mid-run; jobs are
   in-memory and a restart discards them.
 
@@ -223,7 +293,10 @@ concurrency; you will only burn quota.
    unless the measurement is clearly neutral or better.
 2. **Periodic latency probe + trend** — the endpoint moved 50× in a day with no announcement; a cron
    that runs `probe_latency_now.py` hourly and records the median makes the app's verdict meaningful
-   and gives a real regression record (see the observability reference in §9).
+   and gives a real regression record (see the observability reference in §9). Keep the **date** on
+   every number, and read §13 first: this app is probably the heaviest consumer of a brand-new
+   service (**T440223**), so a slow hour is evidence about the *service* — worth handing to the ML
+   team on that ticket — rather than something to fix here.
 3. **Show the full distribution per photo on demand** — the API already returns the whole probability
    vector; exposing it costs nothing and helps users trust (or distrust) a score.
 4. **Cache persistence on Toolforge** — the deployment runs `--mount=none`, so `cache/` is wiped on
@@ -263,11 +336,16 @@ concurrency; you will only burn quota.
 - Category input is unimplemented (warned about in the UI, not silently ignored).
 - The dev host has a 25 MB `node_modules` (jsdom) for the DOM test; it is **excluded** from the
   deploy tarball. Run `npm install` if you need the test.
-- `analyze_latency_timeline.py` / `analyze_earlier_runs.py` are read-only forensic scripts that
+- `probe_thumb_ladder.py` is the thumbnail-ladder canary (§12): it shows what `iiurlwidth=N`
+actually serves, for any file, from cache on re-runs. Run it when a width-related number looks wrong.
+
+`analyze_latency_timeline.py` / `analyze_earlier_runs.py` are read-only forensic scripts that
   summarise `cache/*.json` and the earlier research logs; keep them, they are how the 0.54 s baseline
   was established.
-- Multiple overlapping job runs are allowed (`MAX_PARALLEL_JOBS=2`) but the quota is per *client*,
-  not per job — two concurrent runs exhaust the hour twice as fast.
+- Multiple overlapping job runs are allowed (`MAX_PARALLEL_JOBS=2`) but the anonymous budget is
+  shared per *client* (across all `llm-*` models, §13), not per job — so two concurrent runs exhaust
+  the hour twice as fast. On Toolforge there is no quota to exhaust, but §13's courtesy argument
+  still applies.
 - The `verify_parse2.py` / `verify_comma_case.py` scripts are one-off verifications kept for the
   record; they are not part of the suite.
 
@@ -281,6 +359,17 @@ concurrency; you will only burn quota.
   (quota, thumbnail ladder, pacing), `references/liftwing-wikiportraits-suite-2026-10.md` (the schema
   and its first results) and `references/endpoint-latency-regression-2026-10.md` (the 28 s episode and
   how it was isolated). `wikimedia-ml-services` covers LiftWing generally.
+- **Phabricator `T440223`** — "Deploy an open-weight decision model for classification use cases"
+  (<https://phabricator.wikimedia.org/T440223>), `Open, Needs Triage`, Public. **This is the
+  deployment ticket for the very service this app calls**, so it is the primary source for the
+  endpoint's status, failure modes and target behaviour — and it is where the WikiPortraits
+  evaluation was first reported (comment 2026-10-05 attaching
+  `clef-flash-wikiportraits-live-run-cloudflare-small.pdf`, noting that pose, quality, eyes and face
+  visibility worked and that "fitness for infobox needs some tweaking"). Its description is also the
+  authoritative statement of the *decision-model* shape — an input plus typed questions returning a
+  probability per option in one forward pass, with no generated text — which is what §4 and the
+  About panel quote. See §13. **Read-only:** do not comment, file, assign or re-prioritise on the
+  owner's behalf (that is this agent's default for Phabricator generally).
 - **Wikitech:** `Machine_Learning/LiftWing/Large_Language_Models` — the model list (clef-flash is
   under "Task Specific models"), caps, the rate-limit tiers, the one published benchmark, and the
   "experimental, no SLA" caveat. **It changed on 2026-10-13 05:12 UTC**, hours before the slowdown
@@ -294,17 +383,19 @@ concurrency; you will only burn quota.
 | Symptom | Look at |
 |---|---|
 | A pasted file is "not found" but exists | `python3 -c "import wiclient; print(wiclient.parse_entries('<line>'))"` — check the title and the wiki it picked |
-| Everything takes ~30 s | `python3 probe_latency_now.py` — text-only slow too ⇒ endpoint, not app |
+| Everything takes ~30 s | `python3 probe_latency_now.py` — text-only slow too ⇒ endpoint, not app; the service is new, its ticket is **T440223** (§13) |
 | The list flickers / thumbnails reload | someone reintroduced `innerHTML` on `#items` (invariant 3) |
 | A row says "downloading" forever | the prefetch thread's status handling (invariant 2) |
 | 429s | budget: stop, wait for the top of the hour, or run from Toolforge; check the UI budget line |
-| Run stops at once, rows say "endpoint pre-flight failed" | the text-only probe failed — the endpoint is down or erroring; run `probe_latency_now.py` to confirm before touching the app |
+| Run stops at once, rows say "endpoint pre-flight failed" | the text-only probe failed — the endpoint is down or erroring; run `probe_latency_now.py` to confirm before touching the app. This is the `EngineCore` failure mode `T440223` documents (§13) |
 | Scores look wrong after a schema edit | the schema hash forces fresh calls; old cached values belong to the old wording |
 | A run never finishes, stuck at n-1 of n | look for `Exception in thread` in the server log — a dead producer thread blocks the pipeline; this is not necessarily endpoint latency (see §4) |
 | Numbers present in the job object but missing on the wire | check the field is set *before* the payload is built; per-photo values are refreshed by `_refresh_derived()` on every settle |
 | A question wording "looks better" but the tool ranks worse | candidate range, not sd — read §11 |
 | No photos in the Markdown/PDF report | `cache/thumbs/` missing for those items (deleted?) — reports re-fetch from Commons; a photo that still cannot be embedded is listed under "Images that could not be embedded" in the PDF |
 | The list ordering looks wrong | it is ranked by the composite by design; `rankOf()` in `static/index.html` is the key, `reports.ranked()` the server-side equivalent |
+| "Score them" finishes instantly / every row says cached | working as designed — those answers are saved. Tick **run fresh** to actually call the model (one call per photo) |
+| The page cleared your results without asking first | it should ask whenever there was something to lose (`askNewRun()` in `static/index.html`); a silent clear is a bug — check `hasResults()` |
 | `jsdom is not installed` | `npm install` (dev-only dependency) |
 
 ## 11. Question design: the "infobox ready" experiment (2026-10-13)
@@ -390,3 +481,206 @@ happened while the endpoint was at ~57 s/call. The composite's pose weights are 
 fitted. One genuine open question fell out: the composite and the `choice` variant both rank Jenni
 above Irina; every other wording does the opposite, and the difference is one dimension
 (`eyes_to_camera`: 0.604 vs 0.398). Only human labels can settle it.
+
+---
+
+## 12. Thumbnail width: the 640 → 960 bucket (measured 2026-10-13)
+
+Settled with `probe_thumb_ladder.py` — 10 requests against one 4024×6048 original, all raw responses
+cached in `cache/ladder/`, so every re-run is free:
+
+| `iiurlwidth` asked | `imageinfo.thumbwidth` | `/Npx-` in `thumburl` | bytes downloaded |
+|---|---|---|---|
+| 120 | 120 | 120 | 10,377 |
+| 250 | 250 | 250 | 36,673 |
+| 320 | 320 | **330** | 62,804 |
+| 500 | 500 | 500 | 142,727 |
+| 600 | 600 | **960** | 510,421 |
+| 640 | 640 | **960** | 510,421 *(same asset as 600)* |
+| 800 | 800 | **960** | 510,421 *(same asset)* |
+| 960 | 960 | 960 | 510,421 |
+| 1024 | 1024 | **1280** | 916,726 |
+| 1280 | 1280 | 1280 | 916,726 *(same asset as 1024)* |
+
+**What this means.** The app asks for 640, which is one notch below the 960 step, so it downloads the
+960 asset — and the model server then discards 73 % of those pixels, because it normalises width to
+640 before its encoder (§4). Nothing is *wrong*: `sent_px` decodes the truth and the reports label
+from it. But the request and `thumbwidth` both say 640 while the bytes are 960, and the app pays 3.6×
+the bytes of the nearest bucket below (142,727).
+
+### Options, cheapest first
+
+**A. Make the request honest — `THUMB_WIDTH=960`.** Measured: 640, 800 and 960 return the
+**identical `thumburl`**. So this changes nothing about the bytes, the tokens or the scores; the only
+effect is that the cache key's last field moves `640 → 960`. Because the bytes are the *same file*,
+existing entries can be **renamed rather than re-scored** — verify byte-identity first
+(`sha1sum cache/thumbs/*`) instead of assuming it. Buys: the label matches the asset and §4's trap
+stops being true. **Do this one first — it is free.**
+
+**B. Stop trusting `thumbwidth`; record the served width.** Parse `/Npx-` out of `thumburl`,
+cross-check it against `image_size()` of the downloaded bytes, keep `served_w` *beside* `requested_w`,
+and expose `served_w` in `/api/config` and the About payload. A few lines. Buys: the mislabelling
+class of bug cannot recur, and it generalises to SVG/PDF/video renders, where the served width has
+nothing to do with the request. Note the cross-check is the point — `thumbwidth` echoing the request is
+a documented Wikimedia behaviour (T388792), not a relay or proxy artefact.
+
+**C. Halve the bytes — request the step at or below the target (500).** This is the sanctioned
+upstream pattern. 142,727 B vs 510,421 B is **72 % less downlink for 27 % of the pixels**. **But it is
+not free.** The model would normalise a 500-wide image, i.e. *upsample* it, so the pixels the encoder
+sees are worse than today's 960→640 downscale, and the width in the cache key invalidates every stored
+answer. This needs the treatment the wording experiment got (§11): score the same N photos both ways
+and compare **ordering**, not values. Do not ship it on the byte saving alone.
+
+**D. Cap the long edge instead of the width.** A 2:3 portrait at 960 downloads 1.5× the pixels of a
+16:9 at the same width, so choosing the bucket per aspect ratio would even the bytes out — and it
+would destroy the one thing §4 relies on, "token counts are deterministic per aspect ratio".
+**Not recommended** unless bytes become a real constraint.
+
+**E. Decouple the report image from the sent image.** `thumb_bytes()` embeds *exactly* the bytes that
+were sent, so option C would also shrink the thumbnails inside the PDF and the Markdown report. If C is
+ever taken, decide explicitly whether the report should re-fetch a larger rendition (one extra
+download per photo) or accept the smaller image.
+
+**Do now:** A + B. Leave C alone until someone actually needs the bandwidth — 100 photos/hour × 218 KB
+is ~22 MB/h, and the endpoint charges in **tokens**, which the requested width does not change.
+
+### Done 2026-10-14: A + B implemented
+
+**A** — `wiclient.THUMB_WIDTH` defaults to **960**, a real `THUMB_LADDER` step, alongside the new
+`THUMB_LADDER` and `MODEL_MAX_WIDTH` constants. `test_thumb_width.py` asserts that the configured
+width *is* a ladder step and that 640 is not, so the 640-in-a-960-bucket mistake cannot come back
+silently.
+
+**B** — `wiclient.served_width_from_url()` reads the `/Npx-` segment (handles `/page1-960px-` and
+video keyframes); `resolve()` puts `requested_w` and `served_w` on every item; `_download()`
+cross-checks `served_w` against the decoded bytes and sets `width_mismatch` on the item (logged and
+listed in the run log) if a CDN or proxy ever serves a rendition other than the one the URL
+advertises. `served_w` and `sent_px` reach the UI, the JSON and the CSV; the About panel and
+`/api/config` name the ladder and `MODEL_MAX_WIDTH` instead of implying the request was honoured.
+
+The cache key now uses the **served** width (§3.4), which is what makes A free rather than merely
+correct: because 640 and 960 alias to one asset, the existing `*-640.json` entries keep working
+under the new key. Verified — all 11 local entries were renamed `*-640.json` → `*-960.json`, and a
+live 2-photo run came back `from_cache: true` in **0.15 s with no model calls**, `served_w: 960`,
+`sent_px: 960x720` / `960x1440`, `width_mismatch: null`. `test_ui_contract.py` passes on the new
+build (app boots as `thumb 960px`); the full offline suite is green.
+
+**Canary:** if a served width ever looks wrong, run `python3 probe_thumb_ladder.py [File:Title]` before
+touching the app. A Wikimedia-side ladder change is exactly the kind of event that would otherwise
+silently alter the images the model sees — and with `thumbwidth` echoing the request, the app would
+not notice.
+
+---
+
+## 13. Upstream service context — `T440223` (the endpoint is new, and it moves)
+
+**The ticket:** **[T440223 — "Deploy an open-weight decision model for classification use cases"](https://phabricator.wikimedia.org/T440223)**
+· status **`Open, Needs Triage`** · Public.
+
+It is the deployment request to the ML team for *exactly* the service this app calls: a
+**decision-model** (not a chat model) on LiftWing, choosing between Cloudflare's **Clef** and a
+Cygnet-type setup. Its description is the authoritative statement of the semantics this app depends
+on — an input plus typed questions (yes/no, choice from a list, score on a rubric) **returning a
+probability per option in a single forward pass, generating no text**. That is precisely the
+`noul` / `choice` / `score` vocabulary quoted from the model card in §4 and the About panel.
+
+**Why it belongs in this file.** Three consequences follow, and every one of them has already been
+misread at least once:
+
+1. **The service is new and being actively adjusted.** A change on the serving side shows up here as a
+   change in *this app's numbers* — latency first, but scores too if the model or its image handling
+   is retuned. Any such change is upstream by construction.
+2. **This app is probably the heaviest consumer of it.** A 200-photo WikiPortraits run is 200
+   image-bearing calls through a service chosen for low-volume classification work. So this app is
+   as much a load test of the endpoint as a client of it, and an unusual result here is at least as
+   likely to be evidence *for* the ML team as a bug against this code.
+3. **The ticket states the target: under 1 second per image.** That is the yardstick for judging a
+   slow run — not our own variance, and not the published Wikitech benchmark, which is a different
+   and larger model.
+
+The WikiPortraits work and this ticket are the same thread: the evaluation was first reported *on*
+the ticket (comment 2026-10-05, attaching `clef-flash-wikiportraits-live-run-cloudflare-small.pdf`),
+noting that pose, quality, eyes and face visibility worked while "fitness for infobox needs some
+tweaking" — which is why §11's composite exists and why the headline question is unchanged.
+
+**The latency record is really a record of the endpoint, not of this app:**
+
+| when (UTC) | per-call | context |
+|---|---|---|
+| 2026-10-02, 2026-10-12 | **0.54 s median** (worst 6.95 s) | 62 calls — the `BASELINE_WARM_S` value |
+| 2026-10-13 12:16–12:45 | **28.63 s median** (27.43–29.40, n=20) | no 429s; text-only 27.8/29.0 s, image 28.7/28.6 s |
+| 2026-10-13, later | **~57 s** | the wording experiment (§11) ran entirely at this speed |
+| 2026-10-14 12:39 | **0.42 s median** | 4 calls, all HTTP 200 (text 0.36/0.22 s, image 0.45/0.42 s) |
+
+Two orders of magnitude, twice, in 48 hours. **Always date a latency number** — an undated "the
+endpoint is slow/fast" in this repo is unfalsifiable, and a stale one has already caused a wrong
+conclusion (§4, the dead-thread `NameError` misreported as "the endpoint degraded to >25 min/call").
+
+**The failure mode, for recognition:** the ticket carries the server-side trace — `EngineDeadError` →
+`EngineCore encountered an issue` raised in the serving container's model module
+(/srv/app/model.py — that path is inside the LiftWing container, not this repo) → `vllm.v1.engine` →
+**HTTP 500** on `POST /v1/models/llm-clef-flash:predict`. That is the same `EngineCore` outage recorded
+in §6 for 2026-10-13. So when a run dies at the pre-flight (§3.7), or 500s rather than 429s appear,
+the app is correct to stop and say so — and the evidence belongs on this ticket.
+
+**What limits us: the `LiftWingLLM` policy** ([T426749](https://phabricator.wikimedia.org/T426749)). Every public `llm-*` endpoint
+is governed by it in the REST Gateway, described upstream as "a coarse, interim limit until
+cost/token-based limiting lands". As of **2026-10-14** the table is — verbatim copy in
+`research/wikitech-liftwing-limits-2026-10-14.txt`:
+
+| client class | limit | who |
+|---|---|---|
+| public / anonymous | **100 / hour** | anonymous, user-agent-only **and authenticated** users — a shared *per-client* budget across **all** `llm-*` models |
+| **known network** | **effectively unlimited** | **WMCS — Cloud VPS and Toolforge** (CDN `x-trusted-request: A`) |
+| known client | effectively unlimited | networks associated with a known client (`x-trusted-request: B`) |
+| approved bot | effectively unlimited | community-approved bots (JWT auth) |
+
+The same code therefore runs in **two different regimes**, and nearly every number in this file was
+measured in the second one:
+
+- **Deployed on Toolforge** (production) → *known network*, effectively unlimited. No external quota
+  enforces `HOURLY_BUDGET`, and neither `SPACING` nor `INFLIGHT=1` is required by one either. The page
+  calls this the recommended way to get the higher limit: no API key, no configuration, it follows
+  purely from where the code egresses.
+- **On a laptop / the development host** → *public / anonymous* → **100 calls/hour**, shared per client
+  across all `llm-*` models — not per model, not per user. That is why §5's experiments and the
+  `BASELINE_WARM_S` figure are conservative.
+
+Three consequences:
+
+1. **The `200,000 req/h` figure this file used to quote was wrong** and is removed. The page says
+   "effectively unlimited" and names no number: do not cite a figure the source does not state.
+2. **Token-based limiting is announced as the successor** to this interim policy. This app sends
+   ~1,000-1,300 input tokens per photo and generates none (`output_tokens` is always 0), so a token
+   budget would constrain it differently from a call budget — re-read this section before assuming a
+   200-photo run is cheap.
+3. **The self-imposed cap stays anyway.** "Unlimited" is not a licence to hammer a service that is
+   still new (T440223), and a public tool with no login must not become a load harness aimed at the
+   endpoint. Same shape of answer as §5: measure first, and don't.
+
+**Confirmation of the single-client model:** the page notes that LiftWing Studio "runs on Cloud VPS (a
+known network)" and that "the gateway sees Studio as a single WMCS client rather than individual
+users". That is precisely this app's situation — one server origin for every visitor. It is both why
+Toolforge gets the unlimited tier and why the in-app counter (§4) is the only per-user pacing that
+exists.
+
+**What to do with this, in order:**
+
+1. Re-measure before concluding: `python3 probe_latency_now.py` (4 calls). **If text-only is also
+   slow, the app is innocent** — record the dated number and move on.
+2. Do **not** compensate by adding retries, raising `INFLIGHT`, or shortening `SPACING`. On the dev
+   host that burns a genuinely shared 100 req/h budget (§3.7); on Toolforge the quota is lifted (§13),
+   so the reason is courtesy rather than a cap — and neither is a reason to push harder on a service
+   that is already struggling.
+3. Hand the measurement to the ML team on **T440223** (dated, with text-only vs image split, and the
+   HTTP status). **Hand it over, do not post it** — this agent's default for Phabricator is
+   read-only, and a Wikimedia account holder should file or comment in their own name.
+4. Only then consider whether §7's probe-and-trend cron is worth building, since that is what makes
+   step 3 cheap and routine.
+
+**One caution.** Because this app is a heavy consumer of a young service, "the app is fine" is not
+the same as "the numbers are stable". Latency is the *visible* churn; if the serving stack's image
+preprocessing or the model build changes, the probabilities can move without any error being
+returned — which would invalidate comparisons against cached answers. §4's schema hash covers *our*
+prompt changes, not *their* model changes. If a rerun of a cached photo ever disagrees with its
+stored answer, suspect the service first and re-check this ticket.

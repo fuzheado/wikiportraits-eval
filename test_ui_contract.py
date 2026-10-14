@@ -9,6 +9,7 @@
 import json, re, sys, time, urllib.request
 
 import wiclient as _wc      # the same constants the server runs, so fields can be diffed
+import core as _pg          # the live prompt/config constants (and the default-list cap)
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765"
 UA = "WikiPortraitsEval/0.4 (contract check)"
@@ -197,6 +198,26 @@ for fmt in ("md", "json", "csv", "pdf"):
         first = data.decode().splitlines()[0]
         print(f"      md first line: {first}")
 
-all_bad = bad + bad_about
+# 5. the starter list (default_list.txt) is served, and parseable as pasted
+print("\ndefault list:")
+dl, _h = get("/api/default-list")
+dl_lines = [l for l in (dl.get("text") or "").splitlines() if l.strip()]
+bad_list = []
+if not dl_lines:
+    bad_list.append("default list is empty")
+if dl.get("count") != len(dl_lines):
+    bad_list.append(f"count {dl.get('count')} != {len(dl_lines)} lines served")
+if not all(l.strip().startswith("File:") for l in dl_lines):
+    bad_list.append("every line must be a File: title")
+if any("#" in l for l in dl_lines):
+    bad_list.append("a '#' in a title is silently truncated by the parser")
+if len(dl_lines) > _pg.MAX_INPUT_ITEMS:
+    bad_list.append(f"default list exceeds MAX_INPUT_ITEMS ({_pg.MAX_INPUT_ITEMS})")
+print(f"  {len(dl_lines)} entries from {dl.get('source')} — "
+      f"first: {dl_lines[0] if dl_lines else '(none)'}")
+for b in bad_list:
+    print(f"  MISSING {b}")
+
+all_bad = bad + bad_about + bad_list
 print("\nRESULT:", "PASS" if not missing and not all_bad
       else f"FAIL missing={sorted(missing)} bad={all_bad}")

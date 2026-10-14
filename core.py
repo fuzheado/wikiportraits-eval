@@ -11,6 +11,10 @@ from wiclient import (Budget, CANDIDATE_FLOOR, QUESTIONS, SCHEMA_HASH, STATE, TH
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
+# The starter list the UI shows in the textarea. A plain text file at the repo root so it is easy to
+# find and replace. No comment lines in it: the file is fed to the parser verbatim, and `#` is a
+# character in a Commons filename, not a comment.
+DEFAULT_LIST = os.path.join(HERE, "default_list.txt")
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(HERE, "cache"))
 MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
 INFLIGHT = max(1, int(os.environ.get("INFLIGHT", "1")))   # concurrent model calls (1 = serial)
@@ -29,7 +33,7 @@ PARSE_MAX = int(os.environ.get("PARSE_MAX", "1000"))         # cap /api/parse re
 
 
 # ------------------------------------------------------------------ job store
-def new_job(payload):
+def new_job(payload, no_cache=False):
     if isinstance(payload, str):
         parsed = wiclient.parse_entries(payload)
         entries, warnings = parsed["items"], parsed["warnings"]
@@ -37,6 +41,7 @@ def new_job(payload):
         entries = [{"raw": t, "title": t} for t in payload]
         warnings = []
     job = {"id": uuid.uuid4().hex[:12], "created": time.time(), "status": "queued",
+           "no_cache": bool(no_cache),
            "progress": {"done": 0, "total": len(entries)}, "warnings": warnings,
            "items": [{"raw": e["raw"], "title": e["title"], "status": "pending",
                       "wiki": e.get("wiki", "commons.wikimedia.org")} for e in entries],
@@ -51,14 +56,20 @@ def new_job(payload):
     return job
 
 
-def cache_path(pageid, sha1, wiki="commons.wikimedia.org"):
-    # pageids are per-wiki and do collide, so the host is part of the key
+def cache_path(pageid, sha1, wiki="commons.wikimedia.org", served_w=None):
+    # pageids are per-wiki and do collide, so the host is part of the key.
+    # The width recorded is the SERVED one, not the requested one: Commons quantises `iiurlwidth`
+    # upward to a ladder step, so 640 and 960 fetch byte-identical files and must not produce two
+    # entries for the same image (T388792). `served_w` comes from the thumburl; it is None when the
+    # original is smaller than the request (Commons serves the original rather than upscaling), so
+    # fall back to the width we asked for.
     safe = wiki.replace(":", "_")
-    return os.path.join(CACHE_DIR, f"{safe}-{pageid}-{sha1}-{SCHEMA_HASH}-{THUMB_WIDTH}.json")
+    width = served_w or THUMB_WIDTH
+    return os.path.join(CACHE_DIR, f"{safe}-{pageid}-{sha1}-{SCHEMA_HASH}-{width}.json")
 
 
-def cache_get(pageid, sha1, wiki="commons.wikimedia.org"):
-    p = cache_path(pageid, sha1, wiki)
+def cache_get(pageid, sha1, wiki="commons.wikimedia.org", served_w=None):
+    p = cache_path(pageid, sha1, wiki, served_w)
     if os.path.exists(p):
         try:
             with open(p) as fh:
@@ -68,9 +79,9 @@ def cache_get(pageid, sha1, wiki="commons.wikimedia.org"):
     return None
 
 
-def cache_put(pageid, sha1, payload, wiki="commons.wikimedia.org"):
+def cache_put(pageid, sha1, payload, wiki="commons.wikimedia.org", served_w=None):
     try:
-        with open(cache_path(pageid, sha1, wiki), "w") as fh:
+        with open(cache_path(pageid, sha1, wiki, served_w), "w") as fh:
             json.dump(payload, fh)
     except Exception:
         pass
@@ -79,6 +90,19 @@ def cache_put(pageid, sha1, payload, wiki="commons.wikimedia.org"):
 def log(job, msg):
     job["log"].append(f"{time.strftime('%H:%M:%S')} {msg}")
     job["log"] = job["log"][-200:]
+
+
+def default_list_text():
+    """The example list shown in the textarea, read from `default_list.txt` at the repo root.
+
+    Kept in a file of its own so it can be swapped for a real event's file list without touching
+    code. Missing/unreadable file is not fatal: the UI simply starts empty.
+    """
+    try:
+        with open(DEFAULT_LIST, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
 
 
 def _progress(job):
@@ -171,6 +195,13 @@ def _download(item):
     if size and size[0] * size[1] > wiclient.MAX_SEND_PIXELS:
         raise ValueError(f"rendered thumbnail is {size[0]}x{size[1]} px — above the "
                          f"{wiclient.MAX_SEND_PIXELS}-px cap")
+    # Cross-check the two independent signals for the width the model will have seen: the `/Npx-`
+    # segment of the URL we fetched, and the bytes themselves. If a CDN or proxy ever serves a
+    # rendition other than the one the URL advertises, record it on the item rather than silently
+    # mislabelling the photo — the same failure class as trusting `imageinfo.thumbwidth`.
+    url_w = item.get("served_w")
+    if size and url_w and url_w != size[0]:
+        item["width_mismatch"] = (f"thumburl advertises {url_w}px, bytes decode as {size[0]}px")
     _save_thumb(item, data)
     return (base64.b64encode(data).decode(), f"{size[0]}x{size[1]}" if size else "unknown",
             time.time() - t)
@@ -201,6 +232,10 @@ def _prefetch(items, out, stop, job=None):
             continue
         item["status"] = "ready"
         item["fetch_s"] = round(dt, 2)
+        if item.get("width_mismatch") and job is not None:
+            # the cross-check fired: the URL and the bytes disagree about the served width. Report it
+            # rather than letting a mislabelled photo through (see _download).
+            log(job, f"{item['title']} — served-width mismatch: {item['width_mismatch']}")
         out.put(("ok", item, b64, sent_px, dt))
     out.put(("end", None, None, None, 0.0))
 
@@ -330,11 +365,17 @@ def run_job(job):
     log(job, f"resolved {sum(1 for i in job['items'] if i.get('pageid'))} of {len(job['items'])}")
 
     # cache pass first, so the download thread only handles images that need scoring
+    bypass = bool(job.get("no_cache"))
+    if bypass:
+        log(job, "cache bypassed for this run (no_cache) — every photo is scored fresh, "
+                 "one model call each")
     pending = []
     for item in job["items"]:
         if item["status"] == "notfound":
             continue
-        hit = cache_get(item["pageid"], item.get("sha1"), item.get("wiki", "commons.wikimedia.org"))
+        hit = None if bypass else cache_get(item["pageid"], item.get("sha1"),
+                                            item.get("wiki", "commons.wikimedia.org"),
+                                            item.get("served_w"))
         if hit:
             item.update({"status": "done", "resolved": True, "result": hit["result"],
                          "sent_px": hit.get("sent_px"), "from_cache": True})
@@ -450,7 +491,7 @@ def run_job(job):
                 item.update({"status": "done", "resolved": True, "result": res, "from_cache": False})
                 cache_put(item["pageid"], item.get("sha1"),
                           {"result": res, "sent_px": item["sent_px"], "title": item["title"]},
-                          item.get("wiki", "commons.wikimedia.org"))
+                          item.get("wiki", "commons.wikimedia.org"), item.get("served_w"))
                 score_s += res.get("wall_s") or 0
                 a = res["answers"]
                 pub = wiclient.publish_p(a)
@@ -491,7 +532,7 @@ def run_job(job):
 
 
 # ------------------------------------------------------------------- about
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.6.0"
 MODEL_CARD = "https://huggingface.co/Cloudflare/clef-flash"
 WIKITECH_PAGE = "https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models"
 
@@ -672,7 +713,13 @@ def about_payload() -> dict:
                   "<li>The image bytes and the <code>state</code> string are sent to Wikimedia's "
                   "LiftWing (<code>api.wikimedia.org</code>). Results are cached locally under "
                   "<code>cache/</code>; job state lives in memory and disappears when the server "
-                  "restarts. No accounts, no analytics, no third parties.</li></ul>")},
+                  "restarts. Ticking <b>run fresh</b> ignores those saved answers and re-scores "
+                  "every photo, so the speed you see is a real run — it costs one call per photo, "
+                  "which is why it is off by default. The app also counts its own model calls and "
+                  "paces itself at <code>HOURLY_BUDGET</code> per hour — that ceiling is the app's "
+                  "own choice, not the platform's: on Toolforge the endpoint's "
+                  "<code>LiftWingLLM</code> policy rates WMCS traffic as effectively unlimited "
+                  "(T426749). No accounts, no analytics, no third parties.</li></ul>")},
         {"title": "HTTP API",
          "html": ("<p>Everything the page does is also available programmatically. Client "
                   "timeout should be generous — a call blocks until the whole run finishes "
@@ -680,8 +727,10 @@ def about_payload() -> dict:
                   "<pre>GET  /api/health               → liveness\n"
                   "GET  /api/about                → this panel (live prompt, legends, limits)\n"
                   "GET  /api/config               → budget, cache size, schema hash\n"
+                  "GET  /api/default-list         → the example list (default_list.txt)\n"
                   "POST /api/parse               {\"text\": \"Foo.jpg\\nBar.jpg\"} → resolved metadata\n"
                   "POST /api/run                 {\"text\": …} → job_id; poll GET /api/job/&lt;id&gt;\n"
+                  "                              add \"no_cache\": true to re-score every photo\n"
                   "POST /api/eval                {\"files\": [\"File:A.jpg\", …]} → blocked, final\n"
                   "                                results (≤ " + str(EVAL_MAX) + " files per call)\n"
                   "GET  /api/job/&lt;id&gt;/report.{md,json,csv,pdf}</pre>"
@@ -693,7 +742,7 @@ def about_payload() -> dict:
          "html": (f"<ul><li>App version {esc(APP_VERSION)} · model "
                   f"<code>llm-clef-flash</code> (clef-flash 9B, Apache-2.0, served by WMF on "
                   f"HuggingFace transformers, 1&nbsp;GPU) · schema hash "
-                  f"<code>{esc(SCHEMA_HASH)}</code> · thumbnail width {THUMB_WIDTH}&nbsp;px · "
+                  f"<code>{esc(SCHEMA_HASH)}</code> · thumbnail step {THUMB_WIDTH}&nbsp;px · "
                   f"call spacing {SPACING}&nbsp;s.</li>"
                   f"<li>Latency baseline {BASELINE_WARM_S}&nbsp;s per call, measured on this "
                   f"install (62 recorded calls, 2026-10-02 and 2026-10-12) — not a documented "
@@ -704,7 +753,17 @@ def about_payload() -> dict:
                   f"</li>"
                   f"<li>Parsing and thumbnail rules follow the Wikipedia-AI-Skills "
                   f"<code>commons-file-resolution</code> and <code>wikimedia-commons-thumbnails</code> "
-                  f"skills.</li></ul>")},
+                  f"skills.</li>"
+                  f"<li>Thumbnails are requested at the {THUMB_WIDTH}&nbsp;px step of Commons' "
+                  f"<code>$wgThumbnailSteps</code> ladder "
+                  f"({', '.join(str(x) for x in wiclient.THUMB_LADDER)}). Commons quantises a "
+                  f"request upward to the next step, so asking for anything between steps fetches "
+                  f"the step above it — and <code>imageinfo.thumbwidth</code> reports the request "
+                  f"rather than the file. Every result therefore carries <code>served_w</code> "
+                  f"(read from the thumbnail URL) beside <code>sent_px</code> (decoded from the "
+                  f"bytes), so the width is never taken on trust. The vision encoder then "
+                  f"normalises to {wiclient.MODEL_MAX_WIDTH}&nbsp;px wide whatever is sent."
+                  f"</li></ul>")},
     ]
     return {"app_version": APP_VERSION, "title": "About WikiPortraits Eval",
             "sections": sections,
@@ -712,6 +771,9 @@ def about_payload() -> dict:
             "request": {"endpoint": wiclient.LIFTWING, "model": "llm-clef-flash",
                         "state": STATE, "user_agent": wiclient.UA,
                         "body_template": template, "thumb_width": THUMB_WIDTH,
+                        "thumb_width_is_ladder_step": THUMB_WIDTH in wiclient.THUMB_LADDER,
+                        "thumb_ladder": list(wiclient.THUMB_LADDER),
+                        "model_max_width": wiclient.MODEL_MAX_WIDTH,
                         "spacing_s": SPACING, "schema_hash": SCHEMA_HASH},
             "sources": [MODEL_CARD, WIKITECH_PAGE]}
 
@@ -745,9 +807,21 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
                 return js({"ok": True, "uptime_s": round(time.time() - START, 1)})
             if path == "/api/about":
                 return js(about_payload())
+            if path == "/api/default-list":
+                text = default_list_text()
+                return js({"text": text, "source": "default_list.txt",
+                           "count": len([l for l in text.splitlines() if l.strip()]),
+                           "is_example_list": True})
             if path == "/api/config":
                 return js({"model": "llm-clef-flash", "endpoint": wiclient.LIFTWING,
                            "thumb_width_requested": THUMB_WIDTH, "spacing_s": SPACING,
+                           "thumbnail": {"requested_w": THUMB_WIDTH,
+                                         "is_ladder_step": THUMB_WIDTH in wiclient.THUMB_LADDER,
+                                         "ladder": list(wiclient.THUMB_LADDER),
+                                         "model_max_width": wiclient.MODEL_MAX_WIDTH,
+                                         "served_w": "per photo — read served_w (from the "
+                                                     "thumbnail URL) and sent_px (decoded from "
+                                                     "the bytes) on each result item"},
                            "schema_hash": SCHEMA_HASH, "questions": QUESTIONS,
                            "budget": BUDGET.status(), "cache_dir": CACHE_DIR,
                            "cache_entries": len([f for f in os.listdir(CACHE_DIR) if f.endswith(".json")])})
@@ -781,7 +855,7 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
                 active = [j for j in JOBS.values() if j["status"] in ("queued", "running")]
                 if len(active) >= MAX_PARALLEL_JOBS:
                     return js({"error": "another run is already in progress"}, 409)
-                job = new_job("\n".join(files))
+                job = new_job("\n".join(files), no_cache=data.get("no_cache"))
                 if not job["items"]:
                     return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
                 run_job(job)          # synchronous: /api/eval blocks until the whole run finishes
@@ -815,7 +889,8 @@ def route(method: str, path: str, body: bytes = b"") -> tuple:
                 active = [j for j in JOBS.values() if j["status"] in ("queued", "running")]
                 if len(active) >= MAX_PARALLEL_JOBS:
                     return js({"error": "another run is already in progress"}, 409)
-                job = new_job(data.get("items") or data.get("text", ""))
+                job = new_job(data.get("items") or data.get("text", ""),
+                              no_cache=data.get("no_cache"))
                 if not job["items"]:
                     return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
                 if len(job["items"]) > MAX_INPUT_ITEMS:
@@ -857,6 +932,7 @@ def _eval_row(item: dict) -> dict:
 def _report(job, fmt):
     meta = {"state": STATE, "questions": QUESTIONS, "elapsed_s": job.get("elapsed_s"),
             "latency": latency_summary(job), "spread": job.get("spread"),
+            "no_cache": bool(job.get("no_cache")),
             "pdf_path": os.path.join(CACHE_DIR, f"report-{job['id']}.pdf")}
     name = f'filename="wikiportraits-{job["id"]}.{fmt}"'
     if fmt == "md":

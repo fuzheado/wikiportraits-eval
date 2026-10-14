@@ -221,7 +221,8 @@ def build_md(items: list, meta: dict) -> str:
             L += [f"![{label(it)}]({thumb(it)})", ""]
         L += [f"- Commons: https://commons.wikimedia.org/wiki/{it['title'].replace(' ', '_')}",
               _credit(it),
-              f"- Original {it.get('orig_w')}×{it.get('orig_h')} px; sent {it.get('sent_px')}; "
+              f"- Original {it.get('orig_w')}×{it.get('orig_h')} px; "
+              f"served {it.get('served_w') or '—'} px, sent {it.get('sent_px')}; "
               f"{it['result']['usage'].get('input_tokens')} input tokens; {it['result']['wall_s']} s",
               f"- **composite** (ours): {'—' if comp is None else f'{comp:.3f}'} · "
               f"**P(publish)**: {'—' if pub is None else f'{pub:.3f}'}"
@@ -252,7 +253,7 @@ def build_csv(items: list) -> str:
     w = csv.writer(buf)
     w.writerow(["rank", "title", "pageid", "status", "composite", "P_publish", "P_infobox_ready",
                 "quality_0_4", "pose", "P_eyes_to_camera", "P_face_visible", "input_tokens", "wall_s",
-                "orig_px", "sent_px", "license", "sha1", "error"])
+                "orig_px", "served_w", "sent_px", "license", "sha1", "error"])
     for i, it in enumerate(ranked(items), 1):
         a = _ans(it)
         w.writerow([i, it.get("title") or it.get("raw"), it.get("pageid"), it.get("status"),
@@ -262,7 +263,7 @@ def build_csv(items: list) -> str:
                     a.get("face_visible", {}).get("noul"),
                     (it.get("result") or {}).get("usage", {}).get("input_tokens"),
                     (it.get("result") or {}).get("wall_s"),
-                    f"{it.get('orig_w')}x{it.get('orig_h')}", it.get("sent_px"),
+                    f"{it.get('orig_w')}x{it.get('orig_h')}", it.get("served_w"), it.get("sent_px"),
                     it.get("license"), it.get("sha1"), it.get("error")])
     return buf.getvalue()
 

@@ -53,10 +53,15 @@ with the model's exact questions shown to you.
 
 ## Using it
 
-1. **Paste your list** — one photo per line, in almost any form (see below).
+1. **Paste your list** — one photo per line, in almost any form (see below). The box starts with
+   an example list from **`default_list.txt`** (12 real Commons portraits) — replace that file, or
+   just paste over it, to try your own.
 2. **Check inputs** — the tool resolves each line against Commons and shows you what it understood
-   (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged.
-3. **Score them** — the app first sends a **tiny text-only pre-flight question** to the endpoint
+   (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged. If a
+   previous run's results are on screen, you are asked first — starting a new run clears them.
+3. **Score them** — tick **run fresh** if you want the answers re-computed instead of reusing the
+   ones already saved (that is the honest way to judge speed: one model call per photo). The app
+   first sends a **tiny text-only pre-flight question** to the endpoint
    and shows its verdict in the progress card ("endpoint check ✓ …"). If the endpoint does not
    answer, the run stops there instead of burning the queue on failing calls. One request per
    photo after that, cached, with live progress. A photo already scored shows instantly and costs
@@ -141,6 +146,14 @@ On 2026-10-13 the endpoint ran at ~28.6 s per call — 53× the baseline — for
 image requests, with no rate-limit errors. The tool reports that as `service-side` rather than
 hiding it. The platform is officially experimental and has no availability SLA.
 
+The model itself is new and still being adjusted: `llm-clef-flash` is Cloudflare's Clef, deployed on
+LiftWing under [Phabricator **T440223**](https://phabricator.wikimedia.org/T440223) — still
+`Open, Needs Triage`, with a stated target of **under one second per image**. That is why the same
+tool measured 28.6 s/call on 2026-10-13 and 0.42 s/call on 2026-10-14: the slow runs are the service
+missing its own target, not this app misbehaving. The ticket is also the place to look for the
+endpoint's known failure modes, including the `EngineCore` outage the tool reports as a failed
+pre-flight check.
+
 ## Privacy and data flow
 
 - The browser only talks to this app. Commons lookups, thumbnail downloads and the model call are
@@ -160,8 +173,10 @@ python3 app.py                 # http://127.0.0.1:8765
 PORT=8080 python3 app.py       # honour a supplied port (Toolforge does this)
 ```
 
-Optional settings: `THUMB_WIDTH` (640), `SPACING` (0.9 s between call *starts*, global across
-`INFLIGHT` streams), `INFLIGHT` (1 = serial, the default; set 2 for two concurrent calls within a run — call starts stay SPACING apart globally), `HOURLY_BUDGET` (100),
+Optional settings: `THUMB_WIDTH` (960 — must be a step of Commons' `$wgThumbnailSteps` ladder, since
+Commons quantises the request upward; 640 is not a step, so a 640 request downloads the 960 asset and
+reports 960 as its width), `SPACING` (0.9 s between call *starts*, global across
+`INFLIGHT` streams), `INFLIGHT` (1 = serial, the default; set 2 for two concurrent calls within a run — call starts stay SPACING apart globally), `HOURLY_BUDGET` (100 — the app's *own* courtesy cap, not the platform's: see **Be a good citizen**),
 `MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run), `PARSE_MAX` (1000 per parse),
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
@@ -184,15 +199,28 @@ curl https://wikiportraits-eval.toolforge.org/api/health
 Traditional uWSGI backend: copy `core.py`, `wiclient.py`, `reports.py`, `pdfmin.py`, `static/` and
 `wsgi.py` (as `app.py`) into `$HOME/www/python/src/` and start the webservice.
 
-Running from Toolforge/Cloud VPS also lifts the anonymous quota — WMCS requests are exempt from the
-generic API rate limits, and LiftWing lists known clients on a 200,000 req/h tier.
+Running from Toolforge/Cloud VPS lifts the quota entirely: LiftWing classifies WMCS egress as a
+**known network** (`x-trusted-request: A`), which is *effectively unlimited* rather than the shared
+100 requests/hour anonymous budget. No API key or configuration is needed — it follows from where the
+code runs, not from how it authenticates.
 
 ## Be a good citizen
 
-The model route allows roughly **100 calls per hour per anonymous client**, shared across models, so
-the app scores one photo at a time with a small gap between calls, stops when the server says 429,
-and caches every answer by `(wiki, pageid, sha1, schema, width)` — re-scoring a photo you have
-already scored costs nothing, and re-uploading a file invalidates its cache entry automatically.
+Which limit applies depends entirely on **where the app runs**, and the two cases are not close
+([Rate Limits & Access](https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models#Rate_Limits_&_Access)):
+
+| the app runs on… | tier | practical limit |
+|---|---|---|
+| **Toolforge / Cloud VPS** (the deployment) | known network, `x-trusted-request: A` | **effectively unlimited** |
+| **a laptop**, or anywhere else (local dev) | public / anonymous | **100 requests/hour**, shared per client across *all* `llm-*` models |
+
+So the 100 calls/hour cap in this app is **self-imposed**, not imposed: on the deployment no external
+quota requires it. It stays because being a good neighbour to a brand-new service (§13 of
+`HANDOFF.md`) matters more than speed here, and because a public tool with no login should not be
+usable as a load generator pointed at the endpoint. Either way the app scores one photo at a time
+with a small gap between calls, stops when the server says 429, and caches every answer by
+`(wiki, pageid, sha1, schema, width)` — re-scoring a photo you have already scored costs nothing, and
+re-uploading a file invalidates its cache entry automatically.
 
 ## HTTP API
 
@@ -220,7 +248,8 @@ finished so far), and every one of them **shows the photo next to its evaluation
   card beside its numbers, **plus the composite-distribution chart**: every photo's thumbnail plotted
   on a 0 → best-score axis, stacked when they would overlap — the same picture the web UI shows. Self-contained: no external assets, so it looks the same wherever it is
   opened.
-- **JSON** — everything, including the raw answers, the composite and the run's spread.
+- **JSON** — everything, including the raw answers, the composite, the served thumbnail width
+  (`served_w`) and the run's spread.
 - **CSV** — one row per photo with `composite` and `P_publish` columns, for spreadsheets.
 
 A photo that cannot be embedded is listed at the end of the PDF rather than silently dropped.
@@ -234,6 +263,9 @@ python3 test_commas.py       # file names containing commas (offline)
 python3 test_wsgi.py         # Toolforge uWSGI entry point (offline)
 python3 test_pipeline.py     # download/scoring overlap + state machine (offline)
 python3 test_reports.py      # composite, P(publish), spread, thumbnails in MD/PDF (offline)
+python3 test_thumb_width.py  # served width, ladder steps, cache keying (offline)
+python3 test_default_list.py # the starter list + the "run fresh" flag (offline)
+python3 test_default_list.py --live      # live: 1 batched Commons call, 0 model calls
 python3 check_js.py          # the inline script still parses (offline)
 .venv-pdf/bin/python test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
 node test_render_dom.js      # the results list, ranking and spread in a DOM (needs `npm install`)
@@ -242,8 +274,20 @@ WANT=4 python3 live_pipeline_check.py [URL]   # live: pipeline, states, latency 
 python3 verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports inspected
 ```
 
+**Two checks run automatically.** With `git config core.hooksPath .githooks` (once per clone), a
+pre-commit hook runs the offline suites on every commit — and verifies the starter list against
+Commons **only when `default_list.txt` is staged**, because a network check should never block an
+unrelated commit on Wikimedia being up. `SKIP_LIVE=1` and `SKIP_HOOKS=1` override it. The same split
+runs in CI (`.github/workflows/checks.yml`): offline suites on Python 3.9 and 3.12 plus the DOM test
+on every push, and the Commons check on demand. **Neither ever scores a photo** — that spends the
+hour's quota and calls a service that is still new (see `HANDOFF.md` §13).
+
 ## Project documents
 
+- **`default_list.txt`** — the example list the page starts with (12 real Commons portraits, one
+  `File:` title per line). **Replace this file** to change the default for everyone: it is read at
+  request time, so it needs no code change. No comment lines in it — a `#` is part of a Commons
+  filename, and the parser would treat your comment as a photo name.
 - **`PRD.md`** — what this is for, requirements, architecture, decisions (including rejected
   alternatives and what would reopen them), risks, roadmap.
 - **`HANDOFF.md`** — for whoever maintains or extends this next: invariants, traps, measured
@@ -252,5 +296,7 @@ python3 verify_reports_live.py [URL]     # live: 3 photos end to end, all four r
   before changing any question wording.
 
 Model: `clef-flash` 9.41 B (Apache-2.0, Cloudflare), served by the Wikimedia Foundation on
-[LiftWing](https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models).
+[LiftWing](https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models) —
+deployed under [Phabricator T440223](https://phabricator.wikimedia.org/T440223), a new service whose
+stated target is under a second per image.
 Photographs remain under their own Commons licences. App code MIT.

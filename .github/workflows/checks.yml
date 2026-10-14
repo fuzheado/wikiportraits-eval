@@ -1,0 +1,73 @@
+name: checks
+
+# Everything here is free and offline except `starter-list-live`, which makes exactly one Commons
+# API call and zero model calls — and is manual-only, because a Wikimedia outage or a 429 must
+# never turn an unrelated commit red.
+#
+# The two things this deliberately does NOT do: run a real scoring job (that costs quota against
+# T440223's service) and run test_ui_contract.py / verify_reports_live.py (they need a live server).
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline:
+    name: offline suites (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor this repo advertises (and what a plain `python3` on Toolforge may be);
+        # 3.12 catches "works on my machine" drift. The app is stdlib-only, so there is nothing to
+        # install.
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: what are we running
+        run: python3 -V
+      - name: offline suites
+        run: |
+          python3 test_forms.py
+          python3 test_commas.py
+          python3 test_wsgi.py
+          python3 test_pipeline.py
+          python3 test_reports.py
+          python3 test_thumb_width.py
+          python3 test_default_list.py
+          python3 check_docs.py
+          python3 check_memo_refs.py
+          python3 check_js.py          # needs node
+
+  dom:
+    name: DOM test (jsdom)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: install jsdom
+        run: npm install
+      - name: run the DOM test
+        run: node test_render_dom.js
+
+  starter-list-live:
+    name: starter list resolves on Commons (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: verify every line of default_list.txt exists on Commons
+        env:
+          # Optional. Set it to a contact-URL User-Agent, or the check falls back to the repo's
+          # built-in UA. Never commit a UA string containing an email address you would not publish.
+          WIKIMEDIA_USER_AGENT: ${{ secrets.WIKIMEDIA_USER_AGENT }}
+        run: python3 test_default_list.py --live

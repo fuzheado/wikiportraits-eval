@@ -1,0 +1,61 @@
+#!/bin/sh
+# Pre-commit checks for WikiPortraits Eval.
+#
+#   * the offline suites always run — fast, deterministic, no network, no excuses
+#   * the live Commons check runs ONLY when `default_list.txt` itself changed, because the one
+#     thing that can make it fail for reasons that are not yours is Wikimedia being unavailable
+#     or rate-limiting us. It must not gate an unrelated commit.
+#
+# Escape hatches:
+#   SKIP_LIVE=1  git commit …     # offline checks only
+#   SKIP_HOOKS=1 git commit …     # nothing at all
+#
+# Enable it once per clone (hooks are not versioned automatically):
+#   git config core.hooksPath .githooks
+set -e
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+if [ -n "$SKIP_HOOKS" ]; then
+  echo "pre-commit: skipped (SKIP_HOOKS set)"
+  exit 0
+fi
+
+fail=0
+for t in test_forms.py test_commas.py test_wsgi.py test_pipeline.py test_reports.py \
+         test_thumb_width.py test_default_list.py check_js.py check_docs.py check_memo_refs.py; do
+  if ! out=$(python3 "$t" 2>&1); then
+    echo "pre-commit: $t FAILED"
+    printf '%s\n' "$out" | tail -20
+    fail=1
+  fi
+done
+
+# the DOM test needs jsdom. It need not live in this directory — node walks parent directories when
+# resolving — so ask node whether it can resolve jsdom rather than looking for a local node_modules
+# (looking for the directory silently skipped a test that was passing).
+if command -v node >/dev/null 2>&1; then
+  if node -e "require.resolve('jsdom')" >/dev/null 2>&1; then
+    if ! out=$(node test_render_dom.js 2>&1); then
+      echo "pre-commit: test_render_dom.js FAILED"
+      printf '%s\n' "$out" | tail -20
+      fail=1
+    fi
+  else
+    echo "pre-commit: skipping test_render_dom.js — jsdom not resolvable (run: npm install)"
+  fi
+fi
+
+[ "$fail" = 0 ] || exit 1
+
+# --- the starter list is the one thing worth a network check, and only when it changed -------
+if git diff --cached --name-only --diff-filter=ACM | grep -qx 'default_list.txt'; then
+  if [ -n "$SKIP_LIVE" ]; then
+    echo "pre-commit: default_list.txt changed — live Commons check SKIPPED (SKIP_LIVE set)"
+  else
+    echo "pre-commit: default_list.txt changed — verifying every entry on Commons (1 API call)…"
+    python3 test_default_list.py --live || exit 1
+  fi
+fi
+
+echo "pre-commit: ok"

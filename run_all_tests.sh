@@ -16,6 +16,8 @@ run "test_commas.py"       python3 test_commas.py
 run "test_wsgi.py"         python3 test_wsgi.py
 run "test_pipeline.py"     python3 test_pipeline.py
 run "test_reports.py"      python3 test_reports.py
+run "test_thumb_width.py"  python3 test_thumb_width.py
+run "test_default_list.py" python3 test_default_list.py
 run "check_pdf.py"         python3 check_pdf.py
 run "check_js.py"          python3 check_js.py
 run "check_docs.py"        python3 check_docs.py
