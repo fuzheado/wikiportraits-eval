@@ -292,15 +292,14 @@ and a public tool should not be the thing that load-tests it.
   2. **`start` is a no-op while a webservice is already running** — it answers "Your job is already
      running" and keeps serving the *old* image. Hence `stop` first: a `start` without a preceding
      `stop` silently deploys nothing.
-  3. Use `sudo -niu tools.wikiportraits-eval <cmd>` over SSH, never `become`. This is *already* the
-     upstream advice (`wikimedia-toolforge` §Common Mistakes and its nested-shells section) and it is
+  3. Use `sudo -niu tools.wikiportraits-eval <cmd>` over SSH, never `become …; <cmd>`. This is
+     *already* the upstream advice (`wikimedia-toolforge` §Guardrails & Common Pitfalls) and it is
      **verified here on 2026-10-14**: `become wikiportraits-eval; id` prints `uid=3522(alih)` — the
-     chained command never becomes the tool user — while `sudo -niu tools.wikiportraits-eval id`
-     prints `uid=58240(tools.wikiportraits-eval)`. **But the same skill collection contradicts
-     itself:** `ssh login.toolforge.org "become my-build-tool; toolforge build start …"` is given as
-     the recipe in `wikimedia-toolforge`'s Build Service section and in `toolforge-python` /
-     `toolforge-nodejs`; followed literally it builds as the wrong account. Ignore those, use
-     `sudo -niu`. (Reported as a skill-repo defect, not fixed there yet — see §9.)
+     chained command never becomes the tool user — while `become wikiportraits-eval id` (command as an
+     argument, no semicolon) prints `uid=58240(tools.wikiportraits-eval)`, and so does `sudo -niu`.
+     **Beware:** `wikimedia-toolforge`'s own Build Service recipe uses the broken `…; <cmd>` shape, so
+     following it literally builds as the wrong account. Full audit with proposed upstream edits:
+     `MEMO-toolforge-skills-2026-10-14.md`.
 
   **Proof that the new image is serving:** `APP_VERSION` in `/api/about` (bump it for every deploy —
   `uptime_s` alone cannot distinguish a fresh pod from a fresh image). The `--mount=none` deploy also
@@ -424,12 +423,18 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
   About panel quote. See §13. **Read-only:** do not comment, file, assign or re-prioritise on the
   owner's behalf (that is this agent's default for Phabricator generally).
 - **Toolforge deploy knowledge — what is upstream and what is only here** (checked 2026-10-14 by
-  reading the Wikipedia-AI-Skills repo):
-  - **Upstream and correct:** the `become` vs `sudo -niu` rule (`wikimedia-toolforge`), which is also
-    the most common way to waste an hour on Toolforge. Verified empirically (§6).
-  - **Upstream but self-contradicting:** that same repo's Build Service recipes use
-    `ssh … "become <tool>; toolforge build start …"` — the exact pattern its own warning forbids.
-    Also present in `toolforge-python` and `toolforge-nodejs`. Worth a PR upstream.
+  reading the Wikipedia-AI-Skills repo *and* testing on the bastion; full write-up with exact
+  file:line sites and proposed edits: `MEMO-toolforge-skills-2026-10-14.md`):
+  - **Upstream and correct:** the `become` vs `sudo -niu` rule (`wikimedia-toolforge` §Guardrails &
+    Common Pitfalls). **It is the `;` that matters:** `become <tool> <cmd>` passes the command to
+    `become` and **works** (measured `uid=58240(tools.wikiportraits-eval)`), while
+    `become <tool>; <cmd>` runs `<cmd>` in the *parent* shell (measured `uid=3522(alih)`). A grep
+    cannot tell the two apart, so **test before "fixing" a site** — the six `become <tool> <cmd>`
+    sites in `toolforge-python` / `toolforge-nodejs` are fine and an earlier version of this bullet
+    wrongly called them out.
+  - **Upstream but self-contradicting:** `wikimedia-toolforge`'s own web-app, cron and Build Service
+    recipes use the broken `become <tool>; <cmd>` shape in nine places (627, 630, 633, 643, 657, 660,
+    663, 666, 667 as of `ad48944`) — about sixty lines below the warning that forbids it.
   - **Not upstream at all** (absent on 2026-10-14): `--buildservice-image` wanting `namespace/name`,
     and `start` being a no-op while a webservice already runs. Both are only in §6 here.
 - **Wikitech:** `Machine_Learning/LiftWing/Large_Language_Models` — the model list (clef-flash is
