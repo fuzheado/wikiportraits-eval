@@ -329,6 +329,24 @@ fails the suite instead of shipping.
   local replica of the CI gate and takes about a second. **The general lesson holds:** a check that
   passes because it cannot see the thing it is meant to catch is worse than no check, so state the
   blind spot in the output rather than only in a comment.
+- **A bounded lane search silently hid photos, and the numbers were ugly.** The chart's lane search
+  used to read `while (lane < LANES_MAX && …)` with `LANES_MAX = 5`, and then wrote the result into
+  `lanes[LANES_MAX]` — so the bound was not a cap on *height*, it was an **overflow bucket**: the 7th
+  photo in any 56 px column was drawn at exactly the same `left`/`bottom` as the 6th, and every later
+  one overwrote it. Measured 2026-10-14 by simulating the placement: 6 photos in a clump → 6 distinct
+  positions; **7 → 1 hidden; 12 → 6 hidden; 20 → 14 hidden; 40 → 34 hidden**. The visible symptom is a
+  clump that looks like two or three thumbnails with their score labels printed on top of each other
+  (`0.0932` / `0.0902` overlapping). The fix is to compare against `lanes.length` instead, so a new
+  lane is appended rather than reused — a tall band is better than an invisible photo, and the page
+  scrolls. `test_render_dom.js` renders a deliberate 20-photo clump and asserts 20 distinct positions
+  **and 20 distinct lanes**, with a positive control: restoring `lane < 5` makes it report "got 6
+  lanes".
+- **The lane pitch has to clear the whole thumbnail, not just its image.** A `.cthumb` is
+  `[rank badge, image, score]` with the badge absolutely positioned 9 px *above* the top, so the pitch
+  must cover `IMH` + the label + that overhang. `s` and `m` were 4–14 px short of their own thumb
+  height, which is why a correctly-laned clump still read as one mashed pile. `CHART_SIZES[].ROW` is
+  now `IMH + 28` (s 72, m 90, l 124). **If you change `IMH` or the badge offset, change `ROW` with
+  it** — the two are only related by that arithmetic and nothing enforces it.
 - **`check_docs.py` used to hardcode the owner's home directory** for the one upstream path it
   verifies (`scripts/parse-file-refs.py`, which lives in the Wikipedia-AI-Skills repo). It therefore
   passed on this machine and failed in CI — a repo check must not depend on whose laptop it runs on.

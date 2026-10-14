@@ -364,6 +364,29 @@ ok(lerr2 === null, 'a second run renders without throwing');
 ok(liveThumbs().length === 0, `a new run starts with an empty chart (got ${liveThumbs().length})`);
 ok(/first result lands here/.test(caption()), 'and says what it is waiting for');
 
+// ---- 4f. a dense clump must not hide photos ---------------------------------------------------
+// Measured 2026-10-14: the lane search was bounded at LANES_MAX, and the item that fell out of the
+// bound was written into `lanes[LANES_MAX]` as an overflow bucket — so the 7th photo in a column was
+// drawn at exactly the same left/bottom as the 6th, and a 20-photo clump hid 14 of them behind others.
+// Identical composites are the worst case, so that is what this uses.
+console.log('dense clump');
+const clumpJob = (n, comp) => job(Array.from({ length: n }, (_, i) => {
+  const a = fullAnswers(0.5, 0.5, 0.9, 0.9, 'head_shoulders');
+  return item('done', { pageid: 950 + i, title: `File:Clump ${i + 1}.jpg`, raw: `File:Clump ${i + 1}.jpg`,
+                        composite: comp, publish_p: 0.5,
+                        result: { wall_s: 0.5, usage: {}, answers: a } });
+}), { id: 'clump', status: 'done', progress: { done: n, total: n }, stats: liveStats });
+
+render(clumpJob(20, 0.44));
+const clumpThumbs = [...doc.querySelectorAll('#chart .cthumb')];
+ok(clumpThumbs.length === 20, `every photo in a 20-photo clump is drawn (got ${clumpThumbs.length})`);
+const spots = clumpThumbs.map((e) => `${e.style.left}|${e.style.bottom}`);
+ok(new Set(spots).size === 20,
+   `all 20 sit in distinct positions — a hidden photo is worse than a tall band (got ${new Set(spots).size})`);
+const distinctBottom = new Set(clumpThumbs.map((e) => e.style.bottom));
+ok(distinctBottom.size === 20,
+   `each one gets its own lane rather than sharing an overflow bucket (got ${distinctBottom.size} lanes)`);
+
 // ---- 5. the About panel (async: the panel fetches its content) --------------------
 function finish() {
   console.log(`\nFAILURES: ${failures.length}`);

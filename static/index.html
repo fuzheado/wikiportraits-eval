@@ -548,7 +548,6 @@ function renderChart(job) {
   const top = exact;
   const Z = CHART_SIZES[chartSize] || CHART_SIZES.m;
   const TW = Z.TW, GAP = 10, ROW = Z.ROW;            // thumb width, min gap, lane height (px)
-  const LANES_MAX = 5;
 
   meterEl.innerHTML = `axis 0 → ${fmt(top, 1)} (best photo ${fmt(max)}) · `
     + `<b>${nDone} of ${all.length} scored</b>${running ? " so far" : ""} · our arithmetic, `
@@ -567,11 +566,17 @@ function renderChart(job) {
     : [{key: "", items: done}];
   let y = 0;
   for (const g of groups) {
+    // Stack into lanes so a thumbnail never lands on top of another. NOTE the loop bound: it compares
+    // against `lanes.length`, not a constant, so a new lane is appended when every existing one is
+    // occupied. An earlier version bounded at LANES_MAX and then wrote into `lanes[LANES_MAX]` as an
+    // "overflow bucket" — so the 7th photo in a column was drawn at exactly the same left/bottom as
+    // the 6th, and the 20th hid 14 behind it (measured 2026-10-14). Never cap: a photo that is not
+    // drawn is worse than a tall band, and the page scrolls.
     const lanes = [];                                // each lane: last x (px) occupied
     g.placed = g.items.map((it) => {
       const x = (it.composite / top) * w;
       let lane = 0;
-      while (lane < LANES_MAX && lanes[lane] != null && Math.abs(x - lanes[lane]) < TW + GAP) lane++;
+      while (lane < lanes.length && lanes[lane] != null && Math.abs(x - lanes[lane]) < TW + GAP) lane++;
       lanes[lane] = x;
       return {it, x, lane};
     });
@@ -691,9 +696,13 @@ function renderSpread(sp) {
 
 // stats, grouped so like reads with like: scores together, quality alone, time & tokens together
 // (batch wall, per-call wall, pipeline totals, token spend).
-const CHART_SIZES = {s: {TW: 30, ROW: 58, IMW: 30, IMH: 44},
-                     m: {TW: 46, ROW: 78, IMW: 46, IMH: 62},
-                     l: {TW: 72, ROW: 118, IMW: 72, IMH: 96}};
+// ROW must clear the whole thumbnail, not just its image: the box is [rank badge, image, score], and
+// the badge is absolutely positioned 9px ABOVE the top, so the lane pitch has to cover IMH + the
+// score label + that overhang. S and M were 4-14px short of their own thumb height, which is what
+// made a tight clump read as one mashed pile even when the lanes were assigned correctly.
+const CHART_SIZES = {s: {TW: 30, ROW: 72, IMW: 30, IMH: 44},
+                     m: {TW: 46, ROW: 90, IMW: 46, IMH: 62},
+                     l: {TW: 72, ROW: 124, IMW: 72, IMH: 96}};
 let chartSize = (function () { try { return localStorage.getItem("wp-chart-size") || "m"; }
                               catch (e) { return "m"; } })();
 
