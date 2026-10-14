@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.14.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.15.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
