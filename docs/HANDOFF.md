@@ -443,6 +443,42 @@ and a public tool should not be the thing that load-tests it.
   **Proof that the new image is serving:** `APP_VERSION` in `/api/about` (bump it for every deploy —
   `uptime_s` alone cannot distinguish a fresh pod from a fresh image). The `--mount=none` deploy also
   starts with `cache_entries: 0`: the in-pod cache is wiped on every restart by design (§7.4).
+  - **Verifying a built image WITHOUT deploying it** — worth doing before any risky deploy.
+    `toolforge jobs run --image` accepts only *base* images (`python3.11`, `node20`), **not** your
+    build-service image, and there is no `toolforge images` command despite the jobs help naming one.
+    What works is a throwaway pod in the tool's own namespace, which can pull the fresh digest:
+
+    ```bash
+    kubectl run imgcheck --image=<registry>/<ns>/<img>@sha256:<digest> --restart=Never --command -- sleep 600
+    kubectl exec imgcheck -- sh -c 'ls /layers; du -sh /layers/*'
+    kubectl delete pod imgcheck
+    ```
+
+    **Two traps, both hit.** (1) A pod started with `--command` bypasses the CNB launcher, so the env
+    is bare and `python3` is "not found" while the image is perfectly fine — a confusing detour. To
+    test the *app*, start the pod with **no** `--command`: the launcher then runs the Procfile `web`
+    process and its log prints the app's own startup banner. (2) `kubectl exec` gets the bare env too,
+    so to reach the interpreter from a second exec do what `tools/run_in_pod.sh` does —
+    `P=$(readlink -f /proc/1/exe); LD_LIBRARY_PATH=$(dirname $(dirname $P))/lib $P -c …`. With that,
+    the check is end-to-end with production untouched: `/api/health`, `/api/config`, `/api/about` and
+    `/` all answered from the candidate image (2026-10-14).
+  - **Image size is a hard constraint here, and it was 6× larger than it needed to be.**
+    `toolforge build quota` reports a **1.00 GiB registry limit** per tool (253.90 MiB used on
+    2026-10-14), so every MB is quota. Measured inside the pod:
+
+    | layer | before | after |
+    |---|---|---|
+    | `heroku_nodejs` (a 122 MB `node` binary + npm) | **203 MB** | — |
+    | `heroku_python` | 42 MB | 42 MB |
+    | **total `/layers`** | **~245 MB** | **42 MB** |
+
+    The Node runtime was there for one reason: **the heroku nodejs buildpack fires whenever
+    `package.json` sits at the app root**, and this is a stdlib-Python app. **`jsdom` — the dependency
+    that package.json existed for — was never in the image at all**; there is no `node_modules`
+    anywhere in it. So this was ~200 MB of runtime for a dev-only test dependency, and the fix was to
+    move `package.json` into `tests/` beside the test that uses it (§8). Note there is **no supported
+    way to exclude a buildpack**: `toolforge build start` has no buildpack flag (only `--envvar`), and
+    `NODE_ENV=production` changes nothing when there is nothing to install.
 - **Endpoint state, 2026-10-13:** the `EngineCore` outage from deploy time resolved the same day;
   since then the endpoint has oscillated between ~0.3-0.5 s warm, ~5 s, and ~29-31 s per call
   (`service-side` verdict) — sometimes within the same hour, with text-only calls equally slow,
