@@ -241,9 +241,14 @@ def main():
               f"({(1 - b['elapsed'] / a['elapsed']) * 100:.0f}% saved)")
         if c and c["upstream"]:
             drift = c["upstream"] / a["upstream"]
-            print(f"  drift check: serial C/A upstream ratio {drift:.2f} "
-                  f"({'stable' if 0.8 <= drift <= 1.25 else 'UNSTABLE — endpoint moved during the run, '
-                     'treat the concurrent comparison as unreliable'})")
+            # NOTE: the ternary is hoisted out of the f-string on purpose. Inlining it as
+            # f"({...})" spanning two source lines is PEP 701 (3.12+) only — on the advertised 3.9
+            # floor it is `SyntaxError: EOL while scanning string literal`. check_compat.py now
+            # parses every file with a real python3.9 when one is on PATH.
+            stable = "stable" if 0.8 <= drift <= 1.25 else (
+                "UNSTABLE — endpoint moved during the run, treat the concurrent comparison as "
+                "unreliable")
+            print(f"  drift check: serial C/A upstream ratio {drift:.2f} ({stable})")
         if ratio < 1.35:
             print("  → the server has spare capacity. A second stream is close to free: INFLIGHT=2 helps.")
         elif ratio > 1.7:

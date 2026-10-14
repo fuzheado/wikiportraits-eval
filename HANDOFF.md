@@ -302,6 +302,21 @@ fails the suite instead of shipping.
   not flag**: `a | b` as an expression, because dict/set union is 3.9-safe — an earlier hand-rolled
   grep for PEP 604 found *none* of the three real sites while a naive AST scan over-reported six
   false positives, so trust `check_compat.py`, which discriminates on annotation context.
+- **…and then it still shipped two red CI runs, because it could not see f-strings at all.**
+  `check_compat.py` parsed each file with the *running* interpreter, and `ast.parse(...,
+  feature_version=(3, 9))` does **not** enforce pre-3.12 f-string rules — the 3.12+ tokenizer accepts
+  PEP 701 unconditionally (verified: nested same-delimiter quotes, a backslash, a `#` comment and a
+  newline inside a replacement field all parse even with `feature_version=(3, 9)`). So `f"...{(
+  'a' if c else 'b'
+  'c')}"` — a ternary spanning two source lines inside a double-quoted f-string — passed every
+  local check and died on CI with `SyntaxError: EOL while scanning string literal`
+  (`probe_concurrency.py`, v0.16.0 and v0.17.0). **The fix is not a better heuristic but the real
+  thing**: `check_compat.py` now runs a batch parse under `python3.9` when one is on PATH
+  (`shutil.which`), and prints a NOTE when it is absent instead of implying the file is clean. `python3.9`
+  is installed on the owner's Mac; `python3.9 <test>.py` for the whole offline suite is the fastest
+  local replica of the CI gate and takes about a second. **The general lesson holds:** a check that
+  passes because it cannot see the thing it is meant to catch is worse than no check, so state the
+  blind spot in the output rather than only in a comment.
 - **`check_docs.py` used to hardcode the owner's home directory** for the one upstream path it
   verifies (`scripts/parse-file-refs.py`, which lives in the Wikipedia-AI-Skills repo). It therefore
   passed on this machine and failed in CI — a repo check must not depend on whose laptop it runs on.
