@@ -55,6 +55,13 @@ const dom = new JSDOM(html, {
         if (u.includes('/api/default-list')) {
           return { text: 'File:Example A.jpg\nFile:Example B.jpg', count: 2, source: 'default_list.txt' };
         }
+        if (u.includes('/api/parse')) {
+          return { items: [{ raw: 'File:Example A.jpg', title: 'File:Example A.jpg', ok: true,
+                             pageid: 1, orig_w: 100, orig_h: 200, license: 'CC0' },
+                           { raw: 'File:Example B.jpg', title: 'File:Example B.jpg', ok: true,
+                             pageid: 2, orig_w: 300, orig_h: 400, license: 'CC0' }],
+                   warnings: [], n: 2 };
+        }
         return { items: [], warnings: [], n: 0 };
       },
     });
@@ -231,6 +238,29 @@ function finish() {
      `Load test data fills the box from /api/default-list (got ${inputEl.value.split('\n').length} line(s))`);
   ok(/2 test photos loaded/.test(doc.getElementById('parseinfo').textContent),
      'the pill reports how many test photos were loaded');
+
+  // ---- 7. the button affordance walks Check inputs -> Score them ---------------------------
+  // The blue "primary" style is the only thing telling a first-time user which button is next, so it
+  // must move with the stage: Check -> (list resolved) -> Score them -> (list edited) -> Check.
+  const checkBtn = doc.getElementById('check'), runBtn = doc.getElementById('run');
+  ok(checkBtn.classList.contains('primary') && runBtn.disabled,
+     'before checking: Check inputs is primary and Score them is disabled');
+  checkBtn.click();
+  await new Promise((r) => setTimeout(r, 20));
+  // earlier sections rendered job payloads, so a previous run exists and the confirm must appear
+  const confirmEl = doc.getElementById('confirm-overlay');
+  ok(!confirmEl.classList.contains('hidden'),
+     'a check with results on screen asks before clearing them');
+  doc.getElementById('confirm-yes').click();
+  await new Promise((r) => setTimeout(r, 40));
+  ok(!checkBtn.classList.contains('primary'),
+     'after a successful check the blue leaves Check inputs');
+  ok(runBtn.classList.contains('primary') && !runBtn.disabled,
+     'after a successful check Score them is primary and enabled');
+  doc.getElementById('input').dispatchEvent(new win.Event('input'));
+  await new Promise((r) => setTimeout(r, 10));
+  ok(checkBtn.classList.contains('primary') && runBtn.disabled,
+     'editing the list puts the flow back to step 1 (Check inputs primary, Score them disabled)');
 
   const overlay = doc.getElementById('about-overlay');
   ok(overlay.classList.contains('hidden'), 'the About panel starts hidden');

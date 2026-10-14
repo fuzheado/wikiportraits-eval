@@ -60,7 +60,9 @@ with the model's exact questions shown to you.
    the placeholder disappears as soon as you click into the box.
 2. **Check inputs** — the tool resolves each line against Commons and shows you what it understood
    (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged. If a
-   previous run's results are on screen, you are asked first — starting a new run clears them.
+   previous run's results are on screen, you are asked first — starting a new run clears them. Once
+   the list resolves, the blue highlight moves off this button and onto **Score them**, so the next
+   step is the obvious one; editing the list moves it back.
 3. **Score them** — tick **run fresh** if you want the answers re-computed instead of reusing the
    ones already saved (that is the honest way to judge speed: one model call per photo). The app
    first sends a **tiny text-only pre-flight question** to the endpoint

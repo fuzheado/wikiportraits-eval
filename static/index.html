@@ -551,7 +551,7 @@ function renderJob(job) {
   ["dl-md", "dl-json", "dl-csv", "dl-pdf"].forEach(id => $(id).disabled = !any);
   if (job.status === "done" || job.status === "error") {
     clearInterval(timer); timer = null;
-    $("run").disabled = false; $("check").disabled = false;
+    setStage("done");
   }
 }
 
@@ -633,7 +633,7 @@ function clearResults() {
   $("jobstate").textContent = "idle";
   ["md", "json", "csv", "pdf"].forEach(f => $("dl-" + f).disabled = true);
   $("chartsizerow").hidden = true;
-  $("run").disabled = true;
+  setStage("idle");
 }
 
 // the resolved-inputs table belongs to the list that was just checked, so a new check clears it too
@@ -675,6 +675,31 @@ $("confirm-overlay").addEventListener("click", (e) => {
   if (e.target === $("confirm-overlay")) answerConfirm(false);
 });
 
+// Button affordance. The flow is Check inputs -> Score them, so exactly one button is the obvious
+// next step at any moment: the blue "primary" style moves with the stage, rather than sitting on
+// "Check inputs" forever while the user wonders what to do next.
+//   idle    — nothing checked yet (or the list changed since the last check)
+//   checked — the list resolved, so Score them is armed and blue
+//   running — both disabled; the progress panel is the thing to watch
+//   done    — the run finished; neither is highlighted, the results are the focus
+function setStage(stage) {
+  const check = $("check"), run = $("run");
+  const blue = (el, on) => el.classList.toggle("primary", on);
+  if (stage === "running") {
+    check.disabled = true; run.disabled = true;
+    blue(check, false); blue(run, false);
+  } else if (stage === "checked") {
+    check.disabled = false; run.disabled = false;
+    blue(check, false); blue(run, true);
+  } else if (stage === "done") {
+    check.disabled = false; run.disabled = false;
+    blue(check, false); blue(run, false);
+  } else {                                  // idle
+    check.disabled = false; run.disabled = true;
+    blue(check, true); blue(run, false);
+  }
+}
+
 $("check").onclick = async () => {
   if (!(await askNewRun())) return;
   clearAll();
@@ -694,18 +719,18 @@ $("check").onclick = async () => {
     $("parsed").open = false;               // stay collapsed; the pill beside the buttons already counts
     $("parseinfo").textContent = `${ok} of ${(d.items || []).length} resolved`;
     $("warnings").innerHTML = (d.warnings || []).map(w => `skipped “${esc(w.raw)}” — ${esc(w.reason)}`).join("<br>");
-    $("run").disabled = ok === 0;
+    setStage(ok === 0 ? "idle" : "checked");     // hand the blue highlight over to "Score them"
   } finally { $("check").disabled = false; }
 };
 
 $("run").onclick = async () => {
   if (!(await askNewRun())) return;      // the previous run's cards are about to be discarded
   clearResults();
-  $("run").disabled = true; $("check").disabled = true;
+  setStage("running");
   const r = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: $("input").value, no_cache: $("nocache").checked }) });
   const d = await r.json();
-  if (!r.ok) { $("jobstate").textContent = d.error || "could not start"; $("run").disabled = false; $("check").disabled = false; return; }
+  if (!r.ok) { $("jobstate").textContent = d.error || "could not start"; setStage("checked"); return; }
   jobId = d.job_id;
   clearInterval(timer); timer = setInterval(poll, 1000); poll();
 };
@@ -730,6 +755,7 @@ $("load-test").onclick = async () => {
     if (!d || typeof d.text !== "string" || !d.text.trim()) throw new Error("empty list");
     $("input").value = d.text;
     $("input").classList.remove("hint-off");
+    setStage("idle");          // loaded but not yet checked — "Check inputs" is the next step
     $("parseinfo").textContent = `${d.count || 0} test photos loaded — press Check inputs`;
   } catch (e) {
     $("parseinfo").textContent = "could not load the test list — paste your own list instead";
@@ -741,6 +767,12 @@ $("load-test").onclick = async () => {
 // the grey example is a hint, not content: clicking in must present an empty box to type into
 $("input").addEventListener("focus", () => $("input").classList.add("hint-off"));
 $("input").addEventListener("blur", () => { if (!$("input").value) $("input").classList.remove("hint-off"); });
+// editing the list invalidates the last check, so put the flow back to step 1 and say so
+$("input").addEventListener("input", () => {
+  if (timer) return;                       // a run is in flight; don't touch the flow
+  setStage("idle");
+  $("parseinfo").textContent = "not checked yet — press Check inputs";
+});
 </script>
 </body>
 </html>

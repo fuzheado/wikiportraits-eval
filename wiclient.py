@@ -5,9 +5,13 @@ Stdlib only (urllib): the Toolforge build needs no pip install.
 import base64, hashlib, json, os, re, statistics, threading, time
 import urllib.error, urllib.parse, urllib.request
 
+# The app version lives here rather than in core.py because both need it: core reports it (About,
+# reports) and this module puts it in the default User-Agent. One source of truth — before this, the
+# UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
+APP_VERSION = "0.8.0"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
-    "WikiPortraitsEval/0.4 (https://meta.wikimedia.org/wiki/WikiPortraits) HermesAgent/1.0")
+    f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 LIFTWING = ("https://api.wikimedia.org/service/lw/inference/v1/models/"
             "llm-clef-flash:predict")

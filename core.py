@@ -7,7 +7,8 @@ import base64, json, os, queue, re, threading, time, traceback, uuid
 from urllib.parse import urlparse
 
 import reports, wiclient
-from wiclient import (Budget, CANDIDATE_FLOOR, QUESTIONS, SCHEMA_HASH, STATE, THUMB_WIDTH, SPACING)
+from wiclient import (APP_VERSION, Budget, CANDIDATE_FLOOR, QUESTIONS, SCHEMA_HASH, STATE,
+                      THUMB_WIDTH, SPACING)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -532,8 +533,11 @@ def run_job(job):
 
 
 # ------------------------------------------------------------------- about
-APP_VERSION = "0.7.0"
+# `APP_VERSION` now lives in wiclient.py (it also builds the default User-Agent) and is re-exported
+# by the import above, so `core.APP_VERSION` keeps working (package.sh reads it).
 MODEL_CARD = "https://huggingface.co/Cloudflare/clef-flash"
+LIFTWING_TICKET = "https://phabricator.wikimedia.org/T440223"
+RATE_LIMIT_TICKET = "https://phabricator.wikimedia.org/T426749"
 WIKITECH_PAGE = "https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models"
 
 
@@ -575,6 +579,12 @@ def about_payload() -> dict:
            "photos by a <b>composite</b> it computes itself from three of the answers (face "
            "visible, eyes to camera, pose), and shows the model's own P(publish) and P(infobox) "
            "beside it.</p>"
+           "<p><b>How you drive it:</b> the box starts empty — the accepted formats below are shown "
+           "only as a grey hint — so nothing can be scored by accident. Press <b>Load test data</b> "
+           "to fill it with 12 real Commons photos, or paste your own list. <b>Check inputs</b> "
+           "resolves every line against Commons first; <b>Score them</b> then spends one model call "
+           "per photo. Starting a new run clears the previous results — after asking, and only when "
+           "there is something to lose.</p>"
            "<p>Every answer comes from one request per photo. There is no text generation, no "
            "second pass, no human review, and nothing is written to any wiki.</p>")},
         {"title": "Accepted input formats",
@@ -582,7 +592,7 @@ def about_payload() -> dict:
                   "<p><code>Foo.jpg</code> · <code>File:Foo.jpg</code> · "
                   "<code>commons.wikimedia.org/wiki/File:Foo.jpg</code> · "
                   "<code>https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg</code> · "
-                  "<code>…/thumb/0/06/Foo.jpg/640px-Foo.jpg</code> · "
+                  "<code>…/thumb/0/06/Foo.jpg/960px-Foo.jpg</code> · "
                   "<code>Special:FilePath/Foo.jpg</code> · "
                   "<code>…/w/index.php?title=File:Foo.jpg</code> · "
                   "<code>[[File:Foo.jpg|thumb|caption]]</code></p>"
@@ -609,12 +619,18 @@ def about_payload() -> dict:
            "page ID, dimensions, MIME type, SHA-1, licence, revision timestamp and a pre-rendered "
            "thumbnail URL. Titles are batched <code>|</code>-separated; API normalisation and "
            "redirects are mapped back to the string you pasted.</li>"
-           "<li><b>Cache check</b> on <code>pageid + SHA-1 + schema + width</code>. A cache hit "
+           "<li><b>Cache check</b> on <code>pageid + SHA-1 + schema + served width</code> — the "
+           "width actually <em>served</em>, read from the thumbnail URL, so two different requests "
+           "that resolve to the same rendition share one entry. A cache hit "
            "costs no API call; overwriting a file on Commons changes its SHA-1 and invalidates the "
            "cached answer.</li>"
-           "<li><b>Download the thumbnail</b> server-side — 640&nbsp;px requested. The original file "
-           "is never fetched; Commons renders the size, and the model server downscales anything "
-           "wider to 640&nbsp;px before the vision encoder.</li>"
+           "<li><b>Download the thumbnail</b> server-side, asked for at the " + str(THUMB_WIDTH) +
+           "&nbsp;px step of Commons' <code>$wgThumbnailSteps</code> ladder. The original file is "
+           "never fetched; Commons quantises a request up to the next step it actually renders — "
+           "640 is not a step, which is why the app asks for 960 and sends whatever bytes come back "
+           "— and the model server then downscales to 640&nbsp;px before the vision encoder. Every "
+           "result keeps the served width (<code>served_w</code>) beside the decoded size "
+           "(<code>sent_px</code>).</li>"
            "<li><b>One decision call per photo</b>: the image inlined as base64 plus the schema "
            "below. Downloads for the next photos already run in a background thread while the model "
            "answers, and calls are spaced ~0.9&nbsp;s apart with a stop-on-429 policy (~100 "
@@ -740,8 +756,10 @@ def about_payload() -> dict:
                   "four reports. It honours the same cache, budget and 429 rules as the UI.</p>")},
         {"title": "Provenance",
          "html": (f"<ul><li>App version {esc(APP_VERSION)} · model "
-                  f"<code>llm-clef-flash</code> (clef-flash 9B, Apache-2.0, served by WMF on "
-                  f"HuggingFace transformers, 1&nbsp;GPU) · schema hash "
+                  f"<code>llm-clef-flash</code> (clef-flash 9B, Apache-2.0) — BF16, 16,384-token "
+                  f"context, 1&nbsp;GPU, on the HuggingFace backend rather than vLLM, which is why "
+                  f"this app calls the KServe <code>:predict</code> endpoint and not an "
+                  f"OpenAI-compatible one · schema hash "
                   f"<code>{esc(SCHEMA_HASH)}</code> · thumbnail step {THUMB_WIDTH}&nbsp;px · "
                   f"call spacing {SPACING}&nbsp;s.</li>"
                   f"<li>Latency baseline {BASELINE_WARM_S}&nbsp;s per call, measured on this "
@@ -754,6 +772,12 @@ def about_payload() -> dict:
                   f"<li>Parsing and thumbnail rules follow the Wikipedia-AI-Skills "
                   f"<code>commons-file-resolution</code> and <code>wikimedia-commons-thumbnails</code> "
                   f"skills.</li>"
+                  f"<li>The model was deployed under <a href=\"{LIFTWING_TICKET}\">Phabricator"
+                  f" T440223</a>, and this app is probably its heaviest consumer; the endpoint's "
+                  f"rate-limit policy is <code>LiftWingLLM</code> "
+                  f"(<a href=\"{RATE_LIMIT_TICKET}\">T426749</a>), which rates WMCS traffic as "
+                  f"effectively unlimited but keeps anonymous use at a shared 100 requests/hour."
+                  f"</li>"
                   f"<li>Thumbnails are requested at the {THUMB_WIDTH}&nbsp;px step of Commons' "
                   f"<code>$wgThumbnailSteps</code> ladder "
                   f"({', '.join(str(x) for x in wiclient.THUMB_LADDER)}). Commons quantises a "
