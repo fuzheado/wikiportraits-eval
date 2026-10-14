@@ -519,5 +519,31 @@ function finish() {
   if (pendingThumb) { pendingThumb.click(); doc.getElementById('detail-close').click(); }
   ok(true, 'a thumbnail with no answer yet does not break the popup');
 
+  // ---- 11. row order: ranked (the default) or as pasted --------------------------------------
+  // The fixture is deliberately one whose paste order differs from its ranking (the last line is
+  // the best photo), or the toggle would prove nothing.
+  const shuffled = [['File:First.jpg', 31, 0.20], ['File:Second.jpg', 32, 0.90],
+                    ['File:Third.jpg', 33, 0.50]].map(([title, pageid, comp]) => item('done', {
+    pageid, title, raw: title, composite: comp, publish_p: 0.5,
+    result: { wall_s: 0.4, usage: {}, answers: fullAnswers(0.5, 0.5, 0.9, 0.9, 'head_shoulders') } }));
+  render(job(shuffled, { status: 'done',
+    stats: { n_scored: 3, n_input: 3, composite_mean: 0.53, p_publish_mean: 0.5, p_infobox_mean: 0.5,
+             p_infobox_median: 0.5, p_infobox_max: 0.5, n_above_half: 1, quality_mean: 2.5,
+             tokens_total: 100, wall_median_s: 0.4, wall_total_s: 1.2, poses: {}, n_429: 0 } }));
+  const firstRowText = () => itemsEl.children[0].textContent;
+  ok(/Second/.test(firstRowText()), 'ranked order (the default) puts the best photo first');
+  const firstNode = itemsEl.children[0], firstImg = firstNode.querySelector('img.thumb');
+  const srcBefore = srcSets.get(firstImg);
+  doc.getElementById('ord-input').click();
+  ok(/First/.test(firstRowText()), 'as pasted puts the first line pasted first');
+  ok(/composite rank 2 of 3/.test(itemsEl.children[1].textContent),
+     'in list order the composite rank is named, so the badge cannot be misread as a rank');
+  ok(srcSets.get(firstImg) === srcBefore,
+     `re-ordering did not re-assign any thumbnail (still ${srcBefore} assignment(s))`);
+  ok([...itemsEl.querySelectorAll('img.thumb')].indexOf(firstImg) !== -1,
+     'and the same <img> node is still on the page');
+  doc.getElementById('ord-ranked').click();
+  ok(/Second/.test(firstRowText()), 'switching back restores the ranking');
+
   finish();
 })();

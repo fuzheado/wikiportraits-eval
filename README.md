@@ -74,6 +74,11 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    **The PDF export follows this choice** — with *by pose* selected, the
    report's chart is the same labelled strata rather than the combined axis.
 
+   The list is ordered by the composite, best first. **Order: ranked / as pasted** switches to the
+   order you typed the lines in — the order they were evaluated — and in that view each row's badge
+   is its list position with the composite rank named beside it, so the two numbers stay distinct.
+   Neither view changes any score, and switching does not reload a single thumbnail.
+
    **Click any thumbnail — in the chart or in a result card — to see that photo's determinations
    in place**, without leaving the page: the exact image the model saw, its size, licence and
    cache state, every probability, and links out to the Commons page and the full-resolution file.

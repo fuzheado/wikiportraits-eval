@@ -237,6 +237,10 @@
 
   <div class="card">
     <div class="row"><h2 style="margin:0">3 · Results</h2><span class="grow"></span>
+      <span class="meter">order:</span>
+      <button id="ord-ranked" class="csize" title="Best composite first — the ranked view">ranked</button>
+      <button id="ord-input" class="csize" title="The order you pasted them in, which is the order they were evaluated">as pasted</button>
+      <span class="meter" style="margin:0 8px 0 10px">download:</span>
       <button id="dl-md" disabled>Markdown</button>
       <button id="dl-json" disabled>JSON</button>
       <button id="dl-csv" disabled>CSV</button>
@@ -351,8 +355,10 @@ function renderBody(it) {
 const rows = new Map();      // key -> {el, ttl, status, meta, body, sig}
 const clockStarts = new Map();
 
-function rowFor(it, i) {
-  const key = `${it.pageid || it.title || it.raw || "item"}#${i}`;
+function rowFor(it) {
+  // NOT keyed on the display index: the list is re-sorted on every poll as ranks move, and an
+  // index in the key would make every row a new row each time (see invariant 3).
+  const key = `${it.pageid || it.title || it.raw || "item"}`;
   let row = rows.get(key);
   if (row) return {key, row};
   const el = document.createElement("div");
@@ -370,13 +376,19 @@ function rowFor(it, i) {
   return {key, row};
 }
 
-function renderItem(it, i, rank) {
-  const {key, row} = rowFor(it, i);
+function renderItem(it, i, rank, pos) {
+  const {key, row} = rowFor(it);
   const title = it.title || it.raw || "";
   row.el.dataset.title = title;          // so the popup can be opened from the card
   if (row.ttl.textContent !== title) row.ttl.textContent = title;
-  const rankTxt = rank ? `#${rank} ` : "";
-  if (row.rank.textContent !== rankTxt) row.rank.textContent = rankTxt;
+  // In "as pasted" order the badge shows the *list* position, because that is the sequence being
+  // read; the composite rank is then named in the meta line, so the two numbers cannot be confused.
+  const badge = orderInfo.mode === "input"
+    ? (pos ? `#${pos} ` : "")
+    : (rank ? `#${rank} ` : "");
+  if (row.rank.textContent !== badge) row.rank.textContent = badge;
+  const rankNote = orderInfo.mode === "input" && rank
+    ? ` · composite rank ${rank} of ${orderInfo.n}` : "";
   row.status.textContent = STATUS_LABEL[it.status] || it.status || "pending";
   row.status.className = "status st-" + (it.status || "pending");
   const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
@@ -392,7 +404,8 @@ function renderItem(it, i, rank) {
   } else {
     row.link.style.display = "none";
   }
-  const meta = `${it.sent_px ? `sent ${esc(it.sent_px)}` : ""}`
+  const meta = `${rankNote}`
+    + `${it.sent_px ? `sent ${esc(it.sent_px)}` : ""}`
     + `${it.orig_w ? ` · original ${it.orig_w}×${it.orig_h}` : ""}`
     + `${it.pageid ? ` · <a href="${commons}" target="_blank" rel="noopener">Commons page</a>` : ""}`
     + `${it.license ? ` · ${esc(it.license)}` : ""}`
@@ -442,6 +455,26 @@ function markChartMode() {
   });
 }
 ["combined", "pose"].forEach(k => { const b = $("cm-" + k); if (b) b.onclick = () => setChartMode(k); });
+
+// Row order: best-first (the ranking) or the order the lines arrived in — which is also the order
+// they were evaluated, so it doubles as a progress view. Presentation only: the composite rank is
+// reported either way (badge in ranked mode, named in the meta line in list mode).
+let rowOrder = (function () { try { return localStorage.getItem("wp-row-order") || "ranked"; }
+                              catch (e) { return "ranked"; } })();
+let orderInfo = {mode: "ranked", n: 0};      // read by renderItem, like lastLatency in renderBody
+function setRowOrder(m) {
+  rowOrder = m;
+  try { localStorage.setItem("wp-row-order", m); } catch (e) {}
+  markRowOrder();
+  if (lastJob) renderJob(lastJob);
+}
+function markRowOrder() {
+  ["ranked", "input"].forEach(k => {
+    const b = $("ord-" + k); if (b) b.classList.toggle("active", k === rowOrder);
+  });
+}
+["ranked", "input"].forEach(k => { const b = $("ord-" + k); if (b) b.onclick = () => setRowOrder(k); });
+markRowOrder();
 
 function renderChart(job) {
   const el = $("chart");
@@ -654,17 +687,25 @@ function renderJob(job) {
   // incremental list: rows are created once and patched in place, so the thumbnails never reload.
   // Done photos are ordered by the composite (rank shown), anything still running keeps its place
   // below them.
-  const order = (job.items || []).slice().sort((a, b) => {
-    const ad = a.status === "done", bd = b.status === "done";
-    if (ad !== bd) return ad ? -1 : 1;
-    return ad ? rankOf(b) - rankOf(a) : 0;
-  });
+  const order = (job.items || []).slice();
+  if (rowOrder === "ranked") {
+    order.sort((a, b) => {
+      const ad = a.status === "done", bd = b.status === "done";
+      if (ad !== bd) return ad ? -1 : 1;
+      return ad ? rankOf(b) - rankOf(a) : 0;
+    });
+  }
+  // "as pasted" keeps new_job()'s order — the order the lines arrived in. Unfinished photos then
+  // sit in their own place instead of being pushed below the finished ones, which reads better
+  // while a run is going.
+  const posOf = new Map((job.items || []).map((x, k) => [x, k + 1]));
+  orderInfo = {mode: rowOrder, n: (job.items || []).filter(i => i.status === "done").length};
   const itemsEl = $("items");
   const seen = new Set();
   let rank = 0;
   order.forEach((it, i) => {
     if (it.status === "done") rank += 1;
-    const key = renderItem(it, i, it.status === "done" ? rank : 0);
+    const key = renderItem(it, i, it.status === "done" ? rank : 0, posOf.get(it));
     seen.add(key);
     const row = rows.get(key);
     if (row && itemsEl.children[i] !== row.el) itemsEl.insertBefore(row.el, itemsEl.children[i] || null);
