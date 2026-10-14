@@ -248,9 +248,10 @@
     </div>
     <div class="row" id="sharerow" style="margin-top:8px" hidden>
       <button id="share" title="A single link that reproduces this run: the same list, the same view, replayed from saved answers so opening it cannot spend a model call">Copy share link</button>
-      <input id="shareurl" readonly spellcheck="false"
+      <button id="apilink" title="A ready-to-paste curl command that evaluates this exact list through the HTTP API and prints the ranked JSON">Copy API link</button>
+      <textarea id="shareurl" readonly spellcheck="false" rows="3"
              style="flex:1 1 320px;font:12px ui-monospace,Menlo,monospace;padding:6px 8px;border:1px solid var(--line);border-radius:8px"
-             placeholder="…">
+             placeholder="…"></textarea>
     </div>
     <div id="items" style="margin-top:12px"></div>
     <details style="margin-top:10px"><summary class="meter">Run log</summary>
@@ -1004,6 +1005,33 @@ $("run").onclick = () => startRun();
 // formats are unaffected.
 // One link that reproduces this run: the same list, the same chart view, and ?run=1 so the
 // receiving page replays itself from saved answers — cache-only, so opening it cannot spend.
+// The API form: the same run as a ready-to-paste curl. Deliberately a *command to run* rather than
+// a URL that runs on GET — a GET with a spending side effect fires from link previews, chat unfurls,
+// crawlers, prefetch and an accidental refresh, which is why the share link is cache-only.
+$("apilink").onclick = async () => {
+  const titles = ((lastJob || {}).items || []).map(i => i.title).filter(Boolean);
+  if (!titles.length) return;
+  const box = $("shareurl");
+  const max = configCache.eval_max || 25;            // /api/eval takes a bounded number per call
+  const chunks = [];
+  for (let i = 0; i < titles.length; i += max) chunks.push(titles.slice(i, i + max));
+  const parts = chunks.map((chunk, n) => {
+    const head = chunks.length > 1 ? `# call ${n + 1} of ${chunks.length} (${chunk.length} files)\n` : "";
+    return head + `curl -sS -X POST '${location.origin}/api/eval' `
+      + `-H 'Content-Type: application/json' -d '${JSON.stringify({ files: chunk })}'`;
+  });
+  box.value = `# evaluate these ${titles.length} files and print the ranked JSON — one model call per photo\n`
+    + parts.join("\n\n")
+    + (chunks.length > 1
+        ? `\n\n# /api/eval takes at most ${max} files per call (EVAL_MAX), which is why there are `
+          + `${chunks.length}. Raise EVAL_MAX on the server to do it in one.`
+        : "");
+  box.select();
+  try { await navigator.clipboard.writeText(box.value); $("apilink").textContent = "Copied ✓"; }
+  catch (e) { $("apilink").textContent = "Press ⌘C / Ctrl-C"; }
+  setTimeout(() => { $("apilink").textContent = "Copy API link"; }, 2500);
+};
+
 $("share").onclick = async () => {
   const titles = ((lastJob || {}).items || []).map(i => i.title).filter(Boolean);
   if (!titles.length) return;
@@ -1032,6 +1060,7 @@ $("share").onclick = async () => {
 });
 
 fetch("/api/config").then(r => r.json()).then(c => {
+  configCache = c;
   setBudget(c.budget, `${c.cache_entries} cached results · pacing ${c.spacing_s}s`);
 }).catch(() => {});
 
@@ -1080,6 +1109,7 @@ $("input").addEventListener("input", () => {
 // set by ?run=1: the next run replays from cache only, so a shared link can never
 // spend a model call. Consumed by the run handler, so a later manual click is normal.
 let urlReplay = false;
+let configCache = {};   // /api/config, for EVAL_MAX and the budget line
 const URL_LIST_SOFT_MAX = 2000;    // beyond this a link stops being emailable or bookmarkable
 const URL_LIST_HARD_MAX = 4000;    // refuse outright; the pod logs the whole query string verbatim
 const URL_LIST_ACTION_MAX = 50;    // and never auto-check more entries than this

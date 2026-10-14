@@ -827,6 +827,10 @@ def about_payload() -> dict:
                   "POST /api/eval                {\"files\": [\"File:A.jpg\", …]} → blocked, final\n"
                   "                                results (≤ " + str(EVAL_MAX) + " files per call)\n"
                   "GET  /api/job/&lt;id&gt;/report.{md,json,csv,pdf}</pre>"
+                  "<p>The <b>Copy API link</b> button under a finished run writes a ready-to-paste <code>curl</code> "
+                  "command for that exact list (split per <code>EVAL_MAX</code> if it is long). It is a "
+                  "command to run rather than a URL: a GET that scores would fire from link previews and "
+                  "crawlers, which is why the share link replays from cache only.</p>"
                   "<p><code>/api/eval</code> returns ranked <code>results[]</code> (composite, "
                   "P(publish), pose, quality, per-question probabilities, licence, cache/wall "
                   "info), the run's <code>spread</code> and <code>stats</code>, and links to the "
@@ -918,6 +922,7 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
             if path == "/api/config":
                 return js({"model": "llm-clef-flash", "endpoint": wiclient.LIFTWING,
                            "thumb_width_requested": THUMB_WIDTH, "spacing_s": SPACING,
+                           "eval_max": EVAL_MAX,
                            "thumbnail": {"requested_w": THUMB_WIDTH,
                                          "is_ladder_step": THUMB_WIDTH in wiclient.THUMB_LADDER,
                                          "ladder": list(wiclient.THUMB_LADDER),

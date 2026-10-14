@@ -545,5 +545,35 @@ function finish() {
   doc.getElementById('ord-ranked').click();
   ok(/Second/.test(firstRowText()), 'switching back restores the ranking');
 
+  // ---- 12. Copy API link: the same run as a ready-to-paste curl ----------------------------
+  const doneJobFor = (items) => job(items, { status: 'done',
+    stats: { n_scored: items.length, n_input: items.length, composite_mean: 0.5, p_publish_mean: 0.5,
+             p_infobox_mean: 0.5, p_infobox_median: 0.5, p_infobox_max: 0.5, n_above_half: 1,
+             quality_mean: 2.5, tokens_total: 100, wall_median_s: 0.4, wall_total_s: 1.2,
+             poses: {}, n_429: 0 } });
+  render(doneJobFor(shuffled));
+  doc.getElementById('apilink').click();
+  await new Promise((r) => setTimeout(r, 10));
+  const apiBox = doc.getElementById('shareurl').value;
+  ok(/curl -sS -X POST/.test(apiBox) && /\/api\/eval/.test(apiBox),
+     'Copy API link writes a curl command against /api/eval');
+  ok(apiBox.indexOf('File:First.jpg') !== -1 && apiBox.indexOf('"files":') !== -1,
+     "carrying this run's own files as a POST body");
+  ok(apiBox.indexOf('curl') !== -1 && apiBox.indexOf('GET') === -1,
+     'and it is a POST to run, not a URL that would spend on a GET');
+
+  // more files than EVAL_MAX in one call: split, and say why
+  const bulk = Array.from({ length: 26 }, (_, n) => item('done', {
+    pageid: 500 + n, title: `File:Bulk ${n}.jpg`, raw: `File:Bulk ${n}.jpg`, composite: 0.1 + n * 0.01,
+    result: { wall_s: 0.3, usage: {}, answers: fullAnswers(0.5, 0.5, 0.9, 0.9, 'head_shoulders') } }));
+  render(doneJobFor(bulk));
+  doc.getElementById('apilink').click();
+  await new Promise((r) => setTimeout(r, 10));
+  const bulkBox = doc.getElementById('shareurl').value;
+  const nCurls = (bulkBox.match(/curl -sS -X POST/g) || []).length;
+  ok(nCurls === 2, `26 files become two calls, not one over-long one (got ${nCurls})`);
+  ok(/at most 25 files per call/.test(bulkBox), 'and the command explains the split');
+  ok(/call 1 of 2/.test(bulkBox) && /call 2 of 2/.test(bulkBox), 'labelling each call');
+
   finish();
 })();

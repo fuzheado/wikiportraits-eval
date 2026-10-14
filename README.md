@@ -133,7 +133,12 @@ https://wikiportraits-eval.toolforge.org/?list=File:A.jpg%0AFile:B.jpg&run=1&vie
   spending remains a deliberate act by the person looking at it.
 - **`&view=pose`** (or `view=combined`) reproduces the chart view, so a link can point at the strata
   rather than the single axis.
-- **The simplest way to get one is the app's own `Copy share link` button**, which appears under the
+- **`Copy API link`** writes the same run as a ready-to-paste `curl` command against `POST`
+  `/api/eval`, which returns the ranked JSON in one blocking call. It is deliberately a *command
+  you run* rather than a URL that runs on `GET`: a `GET` with a spending side effect fires from link
+  previews, crawlers and refreshes. Over 25 files it emits one command per 25 (the server's
+  `EVAL_MAX`) and says why.
+- **The simplest way to get a shareable link is the app's own `Copy share link` button**, which appears under the
   results after a run and builds exactly this URL for the run you are looking at.
 - Build links with `encodeURIComponent` in your language (`encodeURIComponent('File:A.jpg\nFile:B.jpg')`).
   Percent-encode a literal `+` as `%2B`, or it will arrive as a space.
