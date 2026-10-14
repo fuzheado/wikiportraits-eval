@@ -52,6 +52,8 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    accident. Press **Load sample list** to fill it with the 12 real Commons portraits from
    **`default_list.txt`** (replace that file to change what everyone gets), or paste your own list —
    the placeholder disappears as soon as you click into the box.
+   **Clicking the title** starts a new session: it asks first, then clears the list and the run on
+   screen (your chart view, thumbnail size and row order are kept).
 2. **Validate files** — the tool resolves each line against Commons and shows you what it understood
    (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged. If a
    previous run's results are on screen, you are asked first — starting a new run clears them. Once

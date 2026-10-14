@@ -120,6 +120,8 @@
   details#parsed summary{cursor:pointer}
   details#parsed table{margin-top:6px}
   .hidden{display:none}
+  #reset{cursor:pointer}
+  #reset:hover{text-decoration:underline}
   .rank{color:var(--muted);font-weight:700;margin-right:7px}
   #spread .sp{margin-top:2px}
   #spread b.big{color:var(--ink)}
@@ -143,7 +145,8 @@
 </head>
 <body>
 <header>
-  <h1>WikiPortraits Eval</h1>
+  <h1><span id="reset" role="button" tabindex="0"
+    title="Start a new session — clears the list and the run on screen. Your chart view, thumbnail size and row order are kept.">WikiPortraits Eval</span></h1>
   <span class="sub">Commons photos → llm-clef-flash on Wikimedia LiftWing · paste a list, get per-image probabilities and a downloadable report</span>
   <span class="grow"></span>
   <button id="about-open" title="What this app does, and exactly what it sends to Clef">About</button>
@@ -790,6 +793,32 @@ document.addEventListener("keydown", (e) => {
   hideAbout();
 });
 
+// ---- a new session from the title -----------------------------------------------------------
+// "New session" means this list and this run — NOT the reader's display preferences (the chart
+// view, thumbnail size and row order live in localStorage and are deliberately kept).
+async function resetSession() {
+  const hasList = !!$("input").value.trim();
+  if (!hasResults() && !hasList) { $("input").focus(); return; }   // nothing to lose: no dialog
+  $("confirm-body").textContent = runInProgress()
+    ? "A run is still in progress. Starting a new session clears this list and its results from the "
+      + "page — the run itself keeps going on the server. Make sure you have saved anything you want "
+      + "to keep. Are you sure you want to do this?"
+    : "Start a new session? This clears the list and the current run's results. Make sure you have "
+      + "saved anything you want to keep — a share link, an API command, or a report. Are you sure "
+      + "you want to do this?";
+  if (!(await askConfirm())) return;
+  clearAll();
+  $("input").value = "";
+  $("input").classList.remove("hint-off");
+  setStage("idle");
+  $("input").focus();
+}
+$("reset").onclick = resetSession;
+// it is a span with role=button, so it must answer the keyboard as well as the mouse
+$("reset").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); resetSession(); }
+});
+
 // ---- the detail popup: a photo and its determinations, without a trip to Commons --------
 // Opened from a chart thumbnail or a result card. It reuses renderBody(), which is the same
 // renderer the cards use, so the two can never disagree. Both entry points use *delegation*
@@ -888,6 +917,7 @@ function clearResults() {
   $("chartsizerow").hidden = true;
   $("sharerow").hidden = true;
   $("shareurl").value = "";
+  $("detail-overlay").classList.add("hidden");
   setStage("idle");
 }
 

@@ -575,5 +575,41 @@ function finish() {
   ok(/at most 25 files per call/.test(bulkBox), 'and the command explains the split');
   ok(/call 1 of 2/.test(bulkBox) && /call 2 of 2/.test(bulkBox), 'labelling each call');
 
+  // ---- 13. the title starts a new session, but only after asking ----------------------------
+  const resetEl = doc.getElementById('reset');
+  ok(resetEl !== null && resetEl.getAttribute('role') === 'button',
+     'the title is a button for resetting');
+  render(doneJobFor(shuffled));                       // something to lose
+  const before = itemsEl.children.length;
+  resetEl.click();
+  await new Promise((r) => setTimeout(r, 10));
+  ok(!doc.getElementById('confirm-overlay').classList.contains('hidden'),
+     'clicking the title asks before wiping the session');
+  doc.getElementById('confirm-cancel').click();
+  await new Promise((r) => setTimeout(r, 10));
+  ok(itemsEl.children.length === before, 'declining leaves the run on screen');
+
+  resetEl.click();
+  await new Promise((r) => setTimeout(r, 10));
+  doc.getElementById('confirm-yes').click();
+  await new Promise((r) => setTimeout(r, 20));
+  ok(itemsEl.children.length === 0, 'accepting clears the results');
+  ok(doc.getElementById('input').value === '', 'and the file list, ready for a new one');
+  ok(doc.getElementById('run').disabled, 'so Score them is disabled again');
+  ok(doc.getElementById('check').classList.contains('primary'),
+     'and Validate files is the next step again');
+  // with nothing left to lose it must not nag
+  resetEl.click();
+  await new Promise((r) => setTimeout(r, 10));
+  ok(doc.getElementById('confirm-overlay').classList.contains('hidden'),
+     'with an empty page it does not open a dialog');
+  // and it is keyboard-reachable, being a span rather than a button
+  doc.getElementById('input').value = 'File:Something.jpg';
+  resetEl.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter' }));
+  await new Promise((r) => setTimeout(r, 10));
+  ok(!doc.getElementById('confirm-overlay').classList.contains('hidden'),
+     'Enter opens it for keyboard users');
+  doc.getElementById('confirm-cancel').click();
+
   finish();
 })();
