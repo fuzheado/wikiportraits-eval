@@ -98,6 +98,12 @@
   .cposes .plabel b{display:block;color:var(--ink);font-size:11.5px;font-weight:650}
   .cgrid{position:absolute;top:0;bottom:20px;width:1px;background:var(--line);opacity:.6}
   #spreaddetails{margin-top:6px}
+  /* the detail popup: the same determinations as a result card, without leaving the page */
+  .detailrow{display:flex;gap:14px;align-items:flex-start;margin-bottom:10px}
+  .detailthumb{max-width:240px;max-height:320px;border:1px solid var(--line);border-radius:8px;
+               object-fit:contain}
+  .detailrow .meta{margin:0 0 6px}
+  .cthumb{cursor:pointer}
   #spreaddetails summary{cursor:pointer;font-size:12.5px}
   .chartbox .caxis{position:absolute;left:0;right:0;bottom:20px;height:2px;background:var(--ink);opacity:.25}
   .ctick{position:absolute;bottom:0;transform:translateX(-50%);font-size:11px;color:var(--muted);
@@ -166,6 +172,15 @@
       <span class="grow"></span>
       <button id="confirm-cancel">Cancel</button>
       <button id="confirm-yes" class="primary">Yes, start over</button></div>
+  </div>
+</div>
+
+<div id="detail-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+  <div class="modal">
+    <div class="row"><h2 id="detail-title" style="margin:0">—</h2>
+      <span class="grow"></span>
+      <button id="detail-close" title="Close">Close ✕</button></div>
+    <div id="detail-body" style="margin-top:10px"></div>
   </div>
 </div>
 
@@ -358,6 +373,7 @@ function rowFor(it, i) {
 function renderItem(it, i, rank) {
   const {key, row} = rowFor(it, i);
   const title = it.title || it.raw || "";
+  row.el.dataset.title = title;          // so the popup can be opened from the card
   if (row.ttl.textContent !== title) row.ttl.textContent = title;
   const rankTxt = rank ? `#${rank} ` : "";
   if (row.rank.textContent !== rankTxt) row.rank.textContent = rankTxt;
@@ -494,7 +510,7 @@ function renderChart(job) {
       const title = it.title || it.raw || "";
       const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
       const rank = rankOf.get(it);
-      html += `<a class="cthumb" style="left:${Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0)}px;
+      html += `<a class="cthumb" data-title="${esc(title)}" style="left:${Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0)}px;
           bottom:${(bandBottom + p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}"
           target="_blank" rel="noopener" title="${rank}. ${esc(title)} — composite ${fmt(it.composite)}">
         <span class="crank">${rank}</span>
@@ -725,8 +741,79 @@ $("about-close").onclick = hideAbout;
 $("about-overlay").addEventListener("click", (e) => { if (e.target === $("about-overlay")) hideAbout(); });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  // close whatever is on top: the detail popup can be open over the results, and the confirm
+  // dialog over that, so this is a stack rather than one overlay
+  if (!$("detail-overlay").classList.contains("hidden")) { hideDetail(); return; }
   if (!$("confirm-overlay").classList.contains("hidden")) { answerConfirm(false); return; }
   hideAbout();
+});
+
+// ---- the detail popup: a photo and its determinations, without a trip to Commons --------
+// Opened from a chart thumbnail or a result card. It reuses renderBody(), which is the same
+// renderer the cards use, so the two can never disagree. Both entry points use *delegation*
+// because the chart and the rows are rebuilt on every poll.
+function detailHtml(it) {
+  const a = ((it.result || {}).answers) || {};
+  const title = it.title || it.raw || "";
+  const commons = it.title
+    ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
+  const facts = [
+    it.sent_px ? `model saw ${esc(it.sent_px)}` : "",
+    it.orig_w ? `original ${it.orig_w}×${it.orig_h}` : "",
+    it.license || "",
+    it.from_cache ? "from cache" : "",
+  ].filter(Boolean).join(" · ");
+  const links = [
+    commons ? `<a href="${commons}" target="_blank" rel="noopener">Commons page ↗</a>` : "",
+    it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener">full-resolution file ↗</a>` : "",
+  ].filter(Boolean).join(" · ");
+  const shown = it.thumburl
+    ? `<img class="detailthumb" src="${esc(it.thumburl)}" alt="${esc(title)}">` : "";
+  const body = it.status === "done" && a.infobox_ready
+    ? renderBody(it)
+    : `<div class="meta">${esc(STATUS_LABEL[it.status] || it.status || "pending")}`
+      + (it.error ? ` — ${esc(it.error)}` : "") + `</div>`;
+  return `<div class="detailrow">${shown}<div class="grow">
+      <div class="meta">${facts}</div>
+      <div>${links}</div>
+    </div></div>${body}
+    <p class="meter" style="margin-top:8px">The thumbnail above is the exact image sent to the
+    model, not the full-size file.</p>`;
+}
+
+function openDetail(it) {
+  if (!it) return;
+  $("detail-title").textContent = (it.title || it.raw || "").replace(/^File:/, "");
+  $("detail-body").innerHTML = detailHtml(it);
+  $("detail-overlay").classList.remove("hidden");
+  $("detail-close").focus();
+}
+function hideDetail() { $("detail-overlay").classList.add("hidden"); }
+
+function itemByTitle(title) {
+  return ((lastJob || {}).items || []).find(x => (x.title || x.raw) === title) || null;
+}
+// a chart thumbnail (the anchor carries data-title; preventDefault keeps us in the app)
+$("chart").addEventListener("click", (e) => {
+  const a = e.target.closest(".cthumb");
+  if (!a) return;
+  const it = itemByTitle(a.dataset.title);
+  if (!it) return;
+  e.preventDefault();
+  openDetail(it);
+});
+// …and the same from a result card's thumbnail
+$("items").addEventListener("click", (e) => {
+  if (!e.target.closest("img.thumb")) return;
+  const row = e.target.closest(".item");
+  const it = row && itemByTitle(row.dataset.title);
+  if (!it) return;
+  e.preventDefault();
+  openDetail(it);
+});
+$("detail-close").onclick = hideDetail;
+$("detail-overlay").addEventListener("click", (e) => {
+  if (e.target === $("detail-overlay")) hideDetail();
 });
 
 // ---- starting a new run: clear the previous one, but ask first ----------------------

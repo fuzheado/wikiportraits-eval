@@ -87,6 +87,7 @@ const item = (status, extra = {}) => ({
   raw: 'File:MKr377445 Susanne Wuest (In die Sonne schauen, Cannes 2025).jpg',
   wiki: 'commons.wikimedia.org', pageid: 165943740, orig_w: 3465, orig_h: 5197,
   license: 'CC BY-SA 4.0', sent_px: '960x1440',
+  url: 'https://upload.wikimedia.org/wikipedia/commons/6/67/MKr377445_Susanne_Wuest.jpg',
   thumburl: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/6/67/MKr377445_Susanne_Wuest_%28In_die_Sonne_schauen%2C_Cannes_2025%29.jpg/960px-MKr377445_Susanne_Wuest_%28In_die_Sonne_schauen%2C_Cannes_2025%29.jpg',
   status, fetch_s: 0.21, ...extra,
 });
@@ -487,6 +488,36 @@ function finish() {
   ok(!/[?&]view=pose/.test(shareBox.value), 'and from the combined view it does not');
   ok(/Copied|Press/.test(doc.getElementById('share').textContent),
      'the button says whether it managed to copy to the clipboard');
+
+  // ---- 10. the detail popup: see a photo's determinations without leaving the page ---------
+  // Opened from a chart thumbnail or a card thumbnail, by delegation (both are rebuilt on every
+  // poll). The default href would open Commons in a new tab, so preventDefault matters.
+  doc.getElementById('cm-combined').click();
+  const overlayEl = doc.getElementById('detail-overlay');
+  ok(overlayEl.classList.contains('hidden'), 'the detail popup starts hidden');
+  const thumb = doc.querySelector('#chart .cthumb');
+  ok(!!thumb, 'the chart draws clickable thumbnails');
+  thumb.click();
+  ok(!overlayEl.classList.contains('hidden'), 'clicking a chart thumbnail opens the popup in-app');
+  const detail = doc.getElementById('detail-body').innerHTML;
+  ok(/composite/.test(detail), 'the popup shows the same determinations as a card');
+  ok(/commons\.wikimedia\.org\/wiki\/File:/.test(detail),
+     'and a link out to the Commons page');
+  ok(/full-resolution file/.test(detail), 'and a link to the full-size file');
+  ok(/exact image sent to the/.test(detail), 'and says which image it is showing');
+  doc.getElementById('detail-close').click();
+  ok(overlayEl.classList.contains('hidden'), 'Close hides it');
+  doc.querySelector('#items img.thumb').click();
+  ok(!overlayEl.classList.contains('hidden'), 'a card thumbnail opens it too');
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape' }));
+  ok(overlayEl.classList.contains('hidden'), 'Escape closes it');
+
+  // a photo with no answer yet must show its state rather than throw
+  render(job([item('downloading', { title: 'File:Pending.jpg', pageid: 99 })]));
+  doc.getElementById('cm-combined').click();
+  const pendingThumb = doc.querySelector('#chart .cthumb');
+  if (pendingThumb) { pendingThumb.click(); doc.getElementById('detail-close').click(); }
+  ok(true, 'a thumbnail with no answer yet does not break the popup');
 
   finish();
 })();

@@ -74,6 +74,11 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    **The PDF export follows this choice** — with *by pose* selected, the
    report's chart is the same labelled strata rather than the combined axis.
 
+   **Click any thumbnail — in the chart or in a result card — to see that photo's determinations
+   in place**, without leaving the page: the exact image the model saw, its size, licence and
+   cache state, every probability, and links out to the Commons page and the full-resolution file.
+   Escape or a click outside closes it.
+
    The run's own numbers are two one-line strips under the title — **Scores** (including mean quality)
    and **Time & tokens** — and the **candidate spread** panel is a one-line summary you can expand when
    you want the ranges, dead-zone shares and leading file names.
