@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.10.0 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.10.1 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -231,6 +231,16 @@ fails the suite instead of shipping.
   not the model's. Tick **run fresh** (`no_cache: true` on `/api/run` and `/api/eval`) — it bypasses the
   read side of the cache and re-scores every photo at one call each, with the hourly budget and
   `SPACING` still enforced. Bypassed answers are written back, so the calls are not wasted.
+- **Positioning a thumbnail mixes two coordinate systems, and the charts got it wrong for a day.**
+  A band's position is naturally measured *down* from the top (that is how the pose labels are
+  placed with CSS `top`), while CSS positions a thumbnail *up* from the bottom (`bottom`). Using the
+  same number for both flips the whole axis: every head-and-shoulders photo was drawn inside the
+  **candid** band (`bottom: g.top + …` instead of `bottom: H - (g.top + g.height) + …`). The counts
+  and the labels were right, so the earlier assertions — `5 strata`, `gridlines only in pose mode`,
+  `thumbs present` — all passed. **Assert containment, not counts:** `test_render_dom.js` now
+  derives each band from its label offsets and checks that every thumb's bottom edge falls inside
+  its own pose's band (verified against a positive control: restoring the bug makes it name the
+  mirrored bands). Anything that maps a data category onto a screen position needs that check.
 - **`quality` is defined only by its five legend labels** (0 unusable … 4 excellent) and by the
   640 px image the model actually sees. Do not describe it as a sharpness or lighting measurement.
 - **The advertised Python floor was a lie until 2026-10-14.** README said "Python 3.9+" while

@@ -472,15 +472,22 @@ function renderChart(job) {
   box.style.height = y + "px";
 
   const rankOf = new Map(done.map((it, i) => [it, done.length - i]));
+  const H = y;                       // total plot height, which is what converts between the two
   let html = "";
   for (const g of groups) {
+    // `g.top` is measured DOWN from the top (that is how the labels are positioned) while CSS
+    // positions a thumbnail UP from the bottom. Convert once, here, and never mix the two: doing it
+    // the naive way flipped the whole axis, so every head-and-shoulders photo was drawn under the
+    // "candid" label (real bug, 2026-10-14). Combined mode has one group spanning the full height,
+    // so this reduces exactly to the original lane*ROW + 26.
+    const bandBottom = H - (g.top + g.height);
     for (const p of g.placed) {
       const it = p.it;
       const title = it.title || it.raw || "";
       const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
       const rank = rankOf.get(it);
       html += `<a class="cthumb" style="left:${Math.max(0, Math.min(w - TW, p.x - TW / 2)).toFixed(0)}px;
-          bottom:${(g.top + p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}"
+          bottom:${(bandBottom + p.lane * ROW + 26).toFixed(0)}px" href="${commons || it.thumburl || "#"}"
           target="_blank" rel="noopener" title="${rank}. ${esc(title)} — composite ${fmt(it.composite)}">
         <span class="crank">${rank}</span>
         <img src="${it.thumburl || ""}" alt="" loading="lazy" decoding="async"

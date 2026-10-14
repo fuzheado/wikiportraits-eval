@@ -255,6 +255,51 @@ ok(!/class="plabel"/.test(combHtml), 'the default combined view has no pose stra
 ok(!/class="cgrid"/.test(combHtml), 'and no gridlines');
 ok(/thumbs stack/.test(combHtml), 'the default view keeps its own caption');
 
+// ---- 4d. each photo must sit in ITS OWN pose band -------------------------------------------
+// Regression: labels are positioned down from the top of the plot while CSS positions a thumbnail
+// up from the bottom, so mixing the two coordinate systems flipped the whole axis — every
+// head-and-shoulders photo was drawn under the "candid" label. Counts and labels looked fine, which
+// is why the earlier assertions missed it. This checks the correspondence a reader actually relies on.
+const mixed = [
+  ['File:Posed.jpg', 21, 'head_shoulders', 0.90],
+  ['File:Waist.jpg', 22, 'three_quarter', 0.70],
+  ['File:Candid.jpg', 23, 'candid', 0.40],
+  ['File:Crowd.jpg', 24, 'group', 0.20],
+].map(([title, pageid, pose, comp]) => {
+  const a = fullAnswers(0.5, 0.5, 0.9, 0.9, pose);
+  return item('done', { pageid, title, raw: title, composite: comp, publish_p: 0.5,
+                        result: { wall_s: 0.6, usage: {}, answers: a } });
+});
+render(job(mixed, { status: 'done',
+  stats: { n_scored: 4, n_input: 4, composite_mean: 0.55, p_publish_mean: 0.5, p_infobox_mean: 0.5,
+           p_infobox_median: 0.5, p_infobox_max: 0.5, n_above_half: 2, quality_mean: 2.5,
+           tokens_total: 100, wall_median_s: 0.5, wall_total_s: 2, poses: {}, n_429: 0 } }));
+doc.getElementById('cm-pose').click();
+const chartEl = doc.getElementById('chart');
+const plotH = parseFloat(chartEl.querySelector('.chartbox').style.height);
+const bands = [...chartEl.querySelectorAll('.cposes .plabel')].map((e) => ({
+  name: e.textContent.replace(/[0-9—]/g, '').trim(), top: parseFloat(e.style.top) }));
+const bandAt = (yTop) => {
+  for (let i = 0; i < bands.length; i++) {
+    const next = i + 1 < bands.length ? bands[i + 1].top : plotH;
+    if (yTop >= bands[i].top && yTop < next) return bands[i].name;
+  }
+  return 'OUTSIDE';
+};
+const WANT = { Posed: 'head & shoulders', Waist: 'three-quarter', Candid: 'candid', Crowd: 'group' };
+const wrongBand = [...chartEl.querySelectorAll('.cthumb')].map((e) => {
+  const title = e.getAttribute('title') || '';
+  const who = Object.keys(WANT).find((n) => title.indexOf(n) !== -1);
+  // the thumb's bottom edge, expressed as a distance down from the top of the plot
+  const edge = plotH - parseFloat(e.style.bottom);
+  return { who, want: WANT[who], got: bandAt(edge) };
+}).filter((r) => r.want !== r.got);
+ok(wrongBand.length === 0,
+   `every photo is drawn inside its own pose band (wrong: ${JSON.stringify(wrongBand)})`);
+ok(bands.length === 5 && bands.map((b) => b.name).join(',') ===
+   'head & shoulders,three-quarter,full body,group,candid',
+   `the bands are labelled and ordered as the poses are (got ${bands.map((b) => b.name).join(',')})`);
+
 // ---- 5. the About panel (async: the panel fetches its content) --------------------
 function finish() {
   console.log(`\nFAILURES: ${failures.length}`);
