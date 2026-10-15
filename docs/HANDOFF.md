@@ -822,7 +822,8 @@ effectively tied. Rewording moves the pile-up from the middle to the ceiling.
 worse than today's question, or the platform swaps the model.
 
 **Caveats, stated in the write-up:** n=4 images (3 portraits, two from the same event), single-question
-records rather than the app's joint six-question schema, no human labels anywhere, and the whole run
+records rather than the app's joint schema (six questions as it stood on that date; seven since
+2026-10-14), no human labels anywhere, and the whole run
 happened while the endpoint was at ~57 s/call. The composite's pose weights are hand-chosen, not
 fitted. One genuine open question fell out: the composite and the `choice` variant both rank Jenni
 above Irina; every other wording does the opposite, and the difference is one dimension
