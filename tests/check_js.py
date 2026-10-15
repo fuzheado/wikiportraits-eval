@@ -73,6 +73,21 @@ elif not re.search(r"=\s*configCache\.max_input_items\b", js):
 else:
     print(f"run cap: /api/config publishes max_input_items={core.MAX_INPUT_ITEMS} and the page reads it")
 
+# The prune labels are built from the cap at runtime ("keep the first 200"), so the buttons must be
+# EMPTY in the HTML. A number typed in here would be a second copy of the server's constant — drifting
+# in exactly the way the check above exists to prevent — and the drift would be invisible, because a
+# stale label still reads like a plausible limit.
+for _bid in ("prune-first", "prune-sample"):
+    _m = re.search(rf'<button id="{_bid}"[^>]*>(.*?)</button>', html, re.S)
+    if not _m:
+        bad.append(f"no #{_bid} button in the HTML")
+        print(f"  MISSING: no #{_bid} button")
+    elif _m.group(1).strip():
+        bad.append(f"#{_bid} bakes a label into the HTML ({_m.group(1).strip()!r})")
+        print(f"  STALE: #{_bid} has fixed label text — the cap must come from /api/config at runtime")
+    else:
+        print(f"#{_bid}: label built at runtime")
+
 # ---- the layout invariant no other check can see -------------------------------------------------
 # `.chartbox` is a flex item whose children are ALL absolutely positioned (thumbs, ticks, gridlines,
 # the axis line), so its automatic width is its content width — which is zero. A zero-width box sends

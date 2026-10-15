@@ -63,7 +63,12 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    running total. If the list is longer than one run accepts (`MAX_INPUT_ITEMS`, 200), the pill says so
    here and there — *over the 200-per-run limit* — and **Score them** refuses with the same sentence, so
    the limit costs no round trip and no lost results. The number comes from the server
-   (`/api/config`), not from a copy in the page.
+   (`/api/config`), not from a copy in the page. Two remedies then appear beside the pill — **keep the
+   first 200** (deterministic, in the order you pasted) and **keep 200 at random** (an unbiased sample,
+   written back in pasted order). Both rewrite the box, so the list you can see is the list that runs
+   and *Copy share link* carries exactly it, and entries that failed to resolve are kept at the end
+   rather than deleted. **A sample is a fair picture of a batch, not the best 200 of it** — nothing has
+   been scored yet, so to find the strongest photos, score all of them in parts instead.
 3. **Score them** — tick **run fresh** if you want the answers re-computed instead of reusing the
    ones already saved (that is the honest way to judge speed: one model call per photo). The app
    first sends a **tiny text-only pre-flight question** to the endpoint

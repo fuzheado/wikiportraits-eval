@@ -35,6 +35,15 @@
   .grow{flex:1}
   .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);
         background:#eef2f7;color:var(--muted)}
+  /* The prune controls, shown only when a validated list is over the per-run cap. Deliberately small:
+     they are a remedy beside the pill, not a competing primary action (Validate files / Score them).
+     The labels are built from `max_input_items` at runtime — the cap is the SERVER's number and lives
+     in /api/config, so no digit is typed into the HTML (tests/check_js.py asserts that).
+     `#prune.hidden` is explicit on purpose: `#prune` sets a display value, and an id selector outranks
+     the bare `.hidden` class — the same trap `.overlay.hidden` above already exists to avoid. */
+  #prune{display:inline-flex;align-items:center;gap:6px}
+  #prune.hidden{display:none}
+  button.mini{font-size:12px;padding:4px 9px;border-radius:6px}
   .bar{height:12px;background:var(--bar);border-radius:999px;overflow:hidden}
   .bar > span{display:block;height:100%;background:var(--blue);width:0;transition:width .3s}
   .meter{font-size:12px;color:var(--muted)}
@@ -235,6 +244,11 @@
         title="Ignore answers already saved on this server and call the model for every photo, so the speed you see is a real run. Costs one call per photo (the hourly budget still applies).">
         <input type="checkbox" id="nocache"> run fresh (ignore saved answers)</label>
       <span id="parseinfo" class="pill">nothing validated yet</span>
+      <span id="prune" class="hidden">
+        <span class="meter">too many —</span>
+        <button id="prune-first" class="mini"></button>
+        <button id="prune-sample" class="mini"></button>
+      </span>
       <span class="grow"></span>
       <span id="budget" class="meter">budget: —</span>
     </div>
@@ -1215,6 +1229,8 @@ function clearResults() {
 function clearAll() {
   clearResults();
   validatedCount = 0;                     // a stale count must never block the next list
+  lastParsed = null;                      // and a stale parse must never be pruned from
+  $("prune").classList.add("hidden");     // validateList() re-decides whether to offer it
   $("parsedbody").innerHTML = "";
   $("warnings").innerHTML = "";
   $("parseinfo").textContent = "nothing validated yet";
@@ -1276,7 +1292,7 @@ function setStage(stage) {
   }
 }
 
-$("check").onclick = async () => {
+async function validateList() {
   if (!(await askNewRun())) return;
   clearAll();
   $("check").disabled = true;
@@ -1298,6 +1314,11 @@ $("check").onclick = async () => {
     // If the key is missing the page still works: it just falls back to the server's own refusal.
     const cap = configCache.max_input_items;
     const over = cap ? total > cap : false;
+    // Offer the remedy right here, where the limit is stated. If /api/config has not landed yet there is
+    // nothing to state and nothing is offered — the server's 413 is still the boundary.
+    lastParsed = d;                          // what the prune buttons rewrite the box from
+    $("prune").classList.toggle("hidden", !over);
+    if (over) setPruneLabels(total, cap);
     $("parsedsummary").textContent = `resolved inputs — ${ok} of ${total}`
       + ` (expand for the table)`;
     $("parsed").open = false;               // stay collapsed; the pill beside the buttons already counts
@@ -1313,7 +1334,63 @@ $("check").onclick = async () => {
     $("warnings").innerHTML = (d.warnings || []).map(w => `skipped “${esc(w.raw)}” — ${esc(w.reason)}`).join("<br>");
     setStage(ok === 0 ? "idle" : "checked");     // hand the blue highlight over to "Score them"
   } finally { $("check").disabled = false; }
-};
+}
+$("check").onclick = () => validateList();
+
+// ---- pruning an over-cap list --------------------------------------------------------------------
+// Pure text editing of the box, done in the page rather than on the server: it adds no capability that
+// selecting the lines and deleting them by hand would not, and the box then holds exactly what will be
+// scored — so the record IS the box, and Copy share link carries the pruned list rather than a
+// description of it.
+let lastParsed = null;      // the last /api/parse reply (nulled by clearAll, so a stale list can't be pruned)
+
+// Fisher-Yates over the index range, then SORTED BACK into the pasted order. The box is the run's input
+// order (the "input order" row mode shows it), so shuffling it would change that for no reason: *which*
+// photos are chosen is the point, not their order.
+function sampleIndexes(n, k) {
+  const idx = [...Array(n).keys()];
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [idx[i], idx[j]] = [idx[j], idx[i]];
+  }
+  return idx.slice(0, k).sort((a, b) => a - b);
+}
+
+function setPruneLabels(total, cap) {
+  $("prune-first").textContent = `keep the first ${cap}`;
+  $("prune-first").title = `Drop the last ${total - cap} and keep the list in the order you pasted it`;
+  $("prune-sample").textContent = `keep ${cap} at random`;
+  // The honest caveat goes in the tooltip rather than being left to be assumed: these photos have NOT
+  // been scored, so nothing here knows which are good. A random sample describes the batch; it is not
+  // the best 200 of it, and believing otherwise is the one way this button could mislead.
+  $("prune-sample").title = `Keep ${cap} of ${total} chosen at random — an unbiased sample of the batch, `
+    + `in the order you pasted it. It is NOT the best ${cap}: nothing has been scored yet, so if you `
+    + `need the strongest photos rather than a fair picture of the batch, score all ${total} in parts.`;
+}
+
+async function pruneList(pick, note) {
+  const items = ((lastParsed || {}).items) || [];
+  const cap = configCache.max_input_items || items.length;
+  if (!items.length || items.length <= cap) return;
+  // Entries that failed to resolve are not scored and do not count toward the cap, so they are kept at
+  // the end: pruning must not silently delete input that may still be fixable, and #warnings beside the
+  // box is exactly where the user was told about them.
+  const skipped = (((lastParsed || {}).warnings) || []).map((w) => w.raw);
+  const kept = pick(items, cap);
+  $("input").value = kept.map((it) => it.raw).concat(skipped).join("\n");
+  $("prune").classList.add("hidden");
+  await validateList();      // re-resolve: the pill, the table and the stage must all match the new box
+  // If one line ever yields more than one file, `kept` can still be over the cap after this — and the
+  // buttons simply come back, because validateList() decides. The remedy stays available rather than
+  // claiming success.
+  $("parseinfo").textContent += ` · ${note(items.length, cap)}`;
+}
+
+$("prune-first").onclick = () => pruneList((items, cap) => items.slice(0, cap),
+  (n, cap) => `kept the first ${cap} of ${n}`);
+$("prune-sample").onclick = () => pruneList(
+  (items, cap) => sampleIndexes(items.length, cap).map((i) => items[i]),
+  (n, cap) => `kept ${cap} of ${n} at random`);
 
 async function startRun() {
   // Refuse an over-cap list before anything else. askNewRun() below would ask to discard the previous

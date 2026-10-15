@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **docs/PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.20.3 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.20.4 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -150,7 +150,16 @@ UI changes.**
    was literally a lie and the limit cost a round trip *and* the previous run’s cards. `check_js.py`
    asserts the page **assigns** it from the config (an *assignment*, not a mention — the guard’s own
    comment contains the string), so it cannot quietly become a hardcoded 200. The client-side check is
-   a courtesy; the server’s 413 is still the boundary. Do not "simplify" any of these: each one closes a named hole
+   a courtesy; the server’s 413 is still the boundary. **And the remedy sits next to the limit:** when a
+   validated list is over the cap, two buttons appear beside the pill — *keep the first 200* and *keep
+   200 at random* — which rewrite the box from the parse result’s `raw` lines, so the box holds exactly
+   what will be scored. Lines that failed to resolve are appended rather than dropped: they were never
+   scored, do not count toward the cap, and pruning must not delete input that is still fixable. The
+   sample is Fisher-Yates-then-*re-sorted*, so the pasted order survives (the box is the run’s input
+   order); its tooltip states outright that a sample is **not the best 200**, which is the only way
+   that button could mislead. Pruning is pure text editing in the page, so like `?check=1` it adds no
+   capability the server did not already expose. `check_js.py` also asserts the two buttons are
+   *empty* in the HTML, since their labels are built from the cap at runtime. Do not "simplify" any of these: each one closes a named hole
    (SSRF-via-userinfo, oversized media, unbounded memory/queue).
 9. **The composite is our arithmetic, not the model's.** `min(face_visible, eyes_to_camera) × pose
    weight × unobstructed` is computed in `wiclient.composite()` and must be labelled as ours

@@ -770,14 +770,15 @@ function finish() {
      'Enter opens it for keyboard users');
   doc.getElementById('confirm-cancel').click();
 
-  // ---- 10. the run cap is stated at Validate, not discovered at Score them --------------------
+  // ---- 10. the run cap is stated at Validate, and an over-cap list can be pruned -------------------
   // Before this, Validate accepted up to PARSE_MAX (1000) and reported "1000 of 1000 resolved", and
   // then the run refused at 201 with a 413: the green light was a lie, and the limit cost a round trip
   // (and the previous run's cards, which startRun() clears before posting). The page now reads the cap
-  // from /api/config and refuses the click itself.
-  {
+  // from /api/config, refuses the click itself, and offers a way through. One factory, one JSDOM per
+  // case, because each case starts a run (a poll timer) and the cases must not see each other's state.
+  function capCase(cap) {
     const calls = [];
-    const d3 = new JSDOM(html, {
+    const d = new JSDOM(html, {
       runScripts: 'dangerously', pretendToBeVisual: true,
       beforeParse(window) {
         window.fetch = async (url, opts) => {
@@ -785,7 +786,7 @@ function finish() {
           return { ok: true, status: 200, json: async () => {
             const u = String(url);
             if (u.includes('/api/config')) {
-              return { eval_max: 25, max_input_items: 3, spacing_s: 0.9, budget: {}, questions: {} };
+              return { eval_max: 25, max_input_items: cap, spacing_s: 0.9, budget: {}, questions: {} };
             }
             if (u.includes('/api/parse')) {
               // Count the entries the box actually holds. A fixed reply made the short-list case below
@@ -796,39 +797,107 @@ function finish() {
               return { items: Array.from({ length: n }, (_, k) => ({ raw: `File:P${k + 1}.jpg`,
                         title: `File:P${k + 1}.jpg`, ok: true, pageid: k + 1 })), warnings: [], n };
             }
-            if (u.includes('/api/run')) return { job_id: 'should-never-happen' };
+            if (u.includes('/api/run')) return { job_id: 'never' };
             return {};
           } };
         };
       },
     });
-    const dd = d3.window.document;
-    await new Promise((r) => setTimeout(r, 25));          // let /api/config land in configCache
-    dd.getElementById('input').value = 'File:P1.jpg\nFile:P2.jpg\nFile:P3.jpg\nFile:P4.jpg';
-    dd.getElementById('check').click();
-    await new Promise((r) => setTimeout(r, 25));
-    ok(/over the 3-per-run limit/.test(dd.getElementById('parseinfo').textContent),
-       'Validate says a 4-photo list is over the cap of 3, instead of just "4 of 4 resolved"');
-    ok(/at most 3/.test(dd.getElementById('run').title),
-       'and the Score them tooltip names the limit before it is clicked');
-    ok(!calls.some((u) => u.includes('/api/run')), 'and nothing has been submitted yet');
-    dd.getElementById('run').click();
-    await new Promise((r) => setTimeout(r, 25));
-    ok(!calls.some((u) => u.includes('/api/run')),
-       'Score them refuses an over-cap list WITHOUT a round trip (no 413 to discover)');
-    ok(/4 photos and a run takes at most 3/.test(dd.getElementById('jobstate').textContent),
-       'and says why, in the same words the pill used');
-    // The list shortens -> the cap must stop applying. A stale count would block a legal run forever.
-    dd.getElementById('input').value = 'File:P1.jpg\nFile:P2.jpg';
-    dd.getElementById('check').click();
-    await new Promise((r) => setTimeout(r, 25));
-    ok(!/per-run limit/.test(dd.getElementById('parseinfo').textContent),
-       'a now-legal list (2 of a cap of 3) shows no warning');
-    dd.getElementById('run').click();
-    await new Promise((r) => setTimeout(r, 25));
-    ok(calls.some((u) => u.includes('/api/run')),
-       'and the same page can submit it — the stale count does not block a legal run');
+    const w = d.window, dd = d.window.document;
+    const type = async (text) => { dd.getElementById('input').value = text;
+                                   dd.getElementById('check').click();
+                                   await new Promise((r) => setTimeout(r, 25)); };
+    const settle = () => new Promise((r) => setTimeout(r, 30));
+    return { w, dd, calls, type, settle,
+             box: () => dd.getElementById('input').value.split('\n').filter((x) => x.trim()),
+             pill: () => dd.getElementById('parseinfo').textContent,
+             pruneHidden: () => dd.getElementById('prune').classList.contains('hidden'),
+             ran: () => calls.some((u) => u.includes('/api/run')) };
   }
+  const FOUR = 'File:P1.jpg\nFile:P2.jpg\nFile:P3.jpg\nFile:P4.jpg';
+
+  const c1 = capCase(3);
+  await c1.settle();                                   // let /api/config land in configCache
+  await c1.type(FOUR);
+  ok(/over the 3-per-run limit/.test(c1.pill()),
+     'Validate says a 4-photo list is over the cap of 3, instead of just "4 of 4 resolved"');
+  ok(/at most 3/.test(c1.dd.getElementById('run').title),
+     'and the Score them tooltip names the limit before it is clicked');
+  ok(!c1.pruneHidden(), 'and the prune controls appear, since there is something the user can do');
+  ok(c1.dd.getElementById('prune-first').textContent === 'keep the first 3',
+     'whose labels carry the cap read from /api/config, not a number typed into the HTML');
+  ok(/NOT the best 3/.test(c1.dd.getElementById('prune-sample').title),
+     'the random-sample tooltip says outright that it is a sample, not the best 3');
+  ok(!c1.ran(), 'and nothing has been submitted yet');
+  c1.dd.getElementById('run').click();
+  await c1.settle();
+  ok(!c1.ran(), 'Score them refuses an over-cap list WITHOUT a round trip (no 413 to discover)');
+  ok(/4 photos and a run takes at most 3/.test(c1.dd.getElementById('jobstate').textContent),
+     'and says why, in the same words the pill used');
+  ok(c1.box().length === 4, 'and the list is untouched by the refusal — nothing is silently dropped');
+
+  // keep the first N: deterministic, order preserved
+  c1.dd.getElementById('prune-first').click();
+  await c1.settle();
+  ok(c1.box().join(',') === 'File:P1.jpg,File:P2.jpg,File:P3.jpg',
+     'keep the first 3 rewrites the box to exactly the first 3 entries, in order');
+  ok(c1.pruneHidden(), 'and the prune controls go away, because the list now fits');
+  ok(!/per-run limit/.test(c1.pill()), 'and the pill no longer warns');
+  ok(/kept the first 3 of 4/.test(c1.pill()),
+     'and the pill records what was done, so the pruning is not invisible afterwards');
+  c1.dd.getElementById('run').click();
+  await c1.settle();
+  ok(c1.ran(), 'and the pruned list can actually be scored');
+
+  // keep N at random: a subset of the same size, no duplicates, pasted order kept
+  const c2 = capCase(3);
+  await c2.settle();
+  await c2.type(FOUR);
+  c2.dd.getElementById('prune-sample').click();
+  await c2.settle();
+  const kept = c2.box();
+  ok(kept.length === 3, `keep 3 at random leaves exactly 3 entries (got ${kept.length})`);
+  ok(new Set(kept).size === 3, 'with no duplicate entries');
+  ok(kept.every((l) => /^File:P[1-4]\.jpg$/.test(l)), 'all drawn from the original list');
+  ok(kept.join(',') === [...kept].sort().join(','),
+     'and written back in the order pasted, not shuffled (the box is the run input order)');
+  ok(/kept 3 of 4 at random/.test(c2.pill()), 'and the pill says it was a random sample');
+
+  // the sampler itself. 40 draws of 3-from-4: p(all 40 identical) = (1/4)^39, so "more than one
+  // distinct result" is effectively certain and will not flake, unlike asserting a particular draw.
+  const draws = new Set();
+  let shapeOk = true;
+  for (let i = 0; i < 40; i++) {
+    const s = c2.w.sampleIndexes(4, 3);
+    shapeOk = shapeOk && s.length === 3 && new Set(s).size === 3
+      && s.every((v) => v >= 0 && v < 4) && s.every((v, k) => k === 0 || v > s[k - 1]);
+    draws.add(s.join(','));
+  }
+  ok(shapeOk, 'sampleIndexes returns 3 unique in-range indexes in ascending order');
+  ok(draws.size > 1, `the sampler is not just the first k — 40 draws gave ${draws.size} distinct sets`);
+  ok(c2.w.sampleIndexes(4, 4).join(',') === '0,1,2,3',
+     'and a full-size sample keeps the whole list in order');
+
+  // A server that does not publish the cap (0.20.1, or a page left open across a deploy): the page must
+  // degrade to the old behaviour rather than guess a number, and the server's 413 stays the boundary.
+  const c3 = capCase(undefined);
+  await c3.settle();
+  await c3.type(FOUR);
+  ok(c3.pruneHidden(), 'with no published cap the prune controls stay hidden instead of guessing');
+  ok(!/per-run limit/.test(c3.pill()), 'and no cap is claimed in the pill');
+  ok(c3.box().length === 4, 'and the list is left completely alone');
+
+  // A stale count must not block a legal run: shorten the list and the verdict must clear with it.
+  const c4 = capCase(3);
+  await c4.settle();
+  await c4.type(FOUR);
+  ok(/over the 3-per-run limit/.test(c4.pill()), 'a 4-of-3 list is refused on this page too');
+  await c4.type('File:P1.jpg\nFile:P2.jpg');
+  ok(!/per-run limit/.test(c4.pill()), 'a now-legal list (2 of a cap of 3) shows no warning');
+  ok(c4.pruneHidden(), 'and the prune controls are hidden again');
+  c4.dd.getElementById('run').click();
+  await c4.settle();
+  ok(c4.ran(), 'and it is submitted — the stale over-cap count does not block a legal run');
 
   finish();
 })();
