@@ -770,5 +770,65 @@ function finish() {
      'Enter opens it for keyboard users');
   doc.getElementById('confirm-cancel').click();
 
+  // ---- 10. the run cap is stated at Validate, not discovered at Score them --------------------
+  // Before this, Validate accepted up to PARSE_MAX (1000) and reported "1000 of 1000 resolved", and
+  // then the run refused at 201 with a 413: the green light was a lie, and the limit cost a round trip
+  // (and the previous run's cards, which startRun() clears before posting). The page now reads the cap
+  // from /api/config and refuses the click itself.
+  {
+    const calls = [];
+    const d3 = new JSDOM(html, {
+      runScripts: 'dangerously', pretendToBeVisual: true,
+      beforeParse(window) {
+        window.fetch = async (url, opts) => {
+          calls.push(String(url));
+          return { ok: true, status: 200, json: async () => {
+            const u = String(url);
+            if (u.includes('/api/config')) {
+              return { eval_max: 25, max_input_items: 3, spacing_s: 0.9, budget: {}, questions: {} };
+            }
+            if (u.includes('/api/parse')) {
+              // Count the entries the box actually holds. A fixed reply made the short-list case below
+              // unfalsifiable — it reported 4 items whatever was typed, so the cap warning never cleared
+              // and the two assertions looked like app bugs when the stub was the bug.
+              let n = 0;
+              try { n = (JSON.parse(opts.body).text.match(/File:/g) || []).length; } catch (e) { n = 0; }
+              return { items: Array.from({ length: n }, (_, k) => ({ raw: `File:P${k + 1}.jpg`,
+                        title: `File:P${k + 1}.jpg`, ok: true, pageid: k + 1 })), warnings: [], n };
+            }
+            if (u.includes('/api/run')) return { job_id: 'should-never-happen' };
+            return {};
+          } };
+        };
+      },
+    });
+    const dd = d3.window.document;
+    await new Promise((r) => setTimeout(r, 25));          // let /api/config land in configCache
+    dd.getElementById('input').value = 'File:P1.jpg\nFile:P2.jpg\nFile:P3.jpg\nFile:P4.jpg';
+    dd.getElementById('check').click();
+    await new Promise((r) => setTimeout(r, 25));
+    ok(/over the 3-per-run limit/.test(dd.getElementById('parseinfo').textContent),
+       'Validate says a 4-photo list is over the cap of 3, instead of just "4 of 4 resolved"');
+    ok(/at most 3/.test(dd.getElementById('run').title),
+       'and the Score them tooltip names the limit before it is clicked');
+    ok(!calls.some((u) => u.includes('/api/run')), 'and nothing has been submitted yet');
+    dd.getElementById('run').click();
+    await new Promise((r) => setTimeout(r, 25));
+    ok(!calls.some((u) => u.includes('/api/run')),
+       'Score them refuses an over-cap list WITHOUT a round trip (no 413 to discover)');
+    ok(/4 photos and a run takes at most 3/.test(dd.getElementById('jobstate').textContent),
+       'and says why, in the same words the pill used');
+    // The list shortens -> the cap must stop applying. A stale count would block a legal run forever.
+    dd.getElementById('input').value = 'File:P1.jpg\nFile:P2.jpg';
+    dd.getElementById('check').click();
+    await new Promise((r) => setTimeout(r, 25));
+    ok(!/per-run limit/.test(dd.getElementById('parseinfo').textContent),
+       'a now-legal list (2 of a cap of 3) shows no warning');
+    dd.getElementById('run').click();
+    await new Promise((r) => setTimeout(r, 25));
+    ok(calls.some((u) => u.includes('/api/run')),
+       'and the same page can submit it — the stale count does not block a legal run');
+  }
+
   finish();
 })();

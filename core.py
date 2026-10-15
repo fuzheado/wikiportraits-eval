@@ -1044,6 +1044,12 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                            "thumb_width_requested": THUMB_WIDTH, "spacing_s": SPACING,
                            "inflight": INFLIGHT,
                            "eval_max": EVAL_MAX,
+                           # Published so the page can refuse an over-cap list itself, in one
+                           # sentence, instead of reporting "300 of 300 resolved" and then failing on
+                           # the next click. The page must NOT hardcode this (tests/check_js.py asserts
+                           # it reads the config): a hardcoded copy drifts from the server's, and the
+                           # symptom of drift is exactly that lie.
+                           "max_input_items": MAX_INPUT_ITEMS,
                            "thumbnail": {"requested_w": THUMB_WIDTH,
                                          "is_ladder_step": THUMB_WIDTH in wiclient.THUMB_LADDER,
                                          "ladder": list(wiclient.THUMB_LADDER),
@@ -1121,7 +1127,7 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                     del JOBS[job["id"]]
                     return js({"error": f"at most {MAX_INPUT_ITEMS} images per run "
                                         f"(MAX_INPUT_ITEMS; got {len(job['items'])}) — split the "
-                                        "list across runs; the hourly budget is the other guardrail"}, 413)
+                                        "list and score the parts"}, 413)
                 threading.Thread(target=run_job, args=(job,), daemon=True).start()
                 return js({"job_id": job["id"], "total": job["progress"]["total"]})
             return js({"error": "not found"}, 404)

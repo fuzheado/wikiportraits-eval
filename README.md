@@ -60,7 +60,10 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    the list resolves, the blue highlight moves off this button and onto **Score them**, so the next
    step is the obvious one; editing the list moves it back. The pill also states the cost —
    *12 of 12 resolved · up to 12 model calls* — and the budget line beside it shows the hour's
-   running total.
+   running total. If the list is longer than one run accepts (`MAX_INPUT_ITEMS`, 200), the pill says so
+   here and there — *over the 200-per-run limit* — and **Score them** refuses with the same sentence, so
+   the limit costs no round trip and no lost results. The number comes from the server
+   (`/api/config`), not from a copy in the page.
 3. **Score them** — tick **run fresh** if you want the answers re-computed instead of reusing the
    ones already saved (that is the honest way to judge speed: one model call per photo). The app
    first sends a **tiny text-only pre-flight question** to the endpoint
@@ -286,7 +289,9 @@ Optional settings: `THUMB_WIDTH` (960 — must be a step of Commons' `$wgThumbna
 Commons quantises the request upward; 640 is not a step, so a 640 request downloads the 960 asset and
 reports 960 as its width), `SPACING` (0.9 s between call *starts*, global across
 `INFLIGHT` streams), `INFLIGHT` (**2** — at most two concurrent model calls within a run; call *starts* stay `SPACING` apart globally, so the second worker only overlaps a call that outlasts `SPACING`. It is therefore inert at healthy speeds and worth ~1.8× once the endpoint degrades. `INFLIGHT=1` restores strict serial; 4 streams is measurably worse — `docs/HANDOFF.md` §7.1), `HOURLY_BUDGET` (100 — the app's *own* courtesy cap, not the platform's: see **Be a good citizen**),
-`MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run), `PARSE_MAX` (1000 per parse),
+`MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run — *Validate files* states it from
+`/api/config`, so a longer list is refused at Validate rather than at the first click of *Score them*),
+`PARSE_MAX` (1000 per parse),
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
 `PROBE_TTL` (600 s, how long a pre-flight verdict is reused), `CACHE_DIR` (`./cache`),

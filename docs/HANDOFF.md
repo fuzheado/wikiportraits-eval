@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **docs/PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.20.2 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.20.3 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
 
 ---
 
@@ -143,7 +143,14 @@ UI changes.**
    Wikimedia Action API — never a URL parsed out of user input — and are byte-capped
    (`MAX_THUMB_BYTES`, streamed) and pixel-capped (`MAX_SEND_PIXELS`). Runs are item-capped
    (`MAX_INPUT_ITEMS`), the job store is bounded (`MAX_JOBS_KEPT`), and /api/parse is capped
-   (`PARSE_MAX`). Do not "simplify" any of these: each one closes a named hole
+   (`PARSE_MAX`). **The run cap is *published*, never duplicated:** `/api/config` carries
+   `max_input_items` and the page reads it, so *Validate files* can report *over the 200-per-run limit*
+   instead of showing a green “1000 of 1000 resolved” and then letting *Score them* fail with a 413.
+   Wrong until 0.20.3: `PARSE_MAX` (1000) was five times what a run accepts (200), so the green light
+   was literally a lie and the limit cost a round trip *and* the previous run’s cards. `check_js.py`
+   asserts the page **assigns** it from the config (an *assignment*, not a mention — the guard’s own
+   comment contains the string), so it cannot quietly become a hardcoded 200. The client-side check is
+   a courtesy; the server’s 413 is still the boundary. Do not "simplify" any of these: each one closes a named hole
    (SSRF-via-userinfo, oversized media, unbounded memory/queue).
 9. **The composite is our arithmetic, not the model's.** `min(face_visible, eyes_to_camera) × pose
    weight × unobstructed` is computed in `wiclient.composite()` and must be labelled as ours

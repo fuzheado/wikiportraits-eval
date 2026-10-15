@@ -50,6 +50,29 @@ for b in bad:
     print(f"  MISMATCH {b}")
 print(f"shared constants: {'agree' if not bad else 'DISAGREE (' + str(len(bad)) + ')'}")
 
+# ---- the run cap is published, not duplicated ----------------------------------------------------
+# `MAX_INPUT_ITEMS` is a *server* number the page cannot know at build time, so unlike the constants
+# above there is nothing to compare — so assert the two halves of the mechanism instead. The failure
+# this prevents was found on 2026-10-14: Validate accepted up to PARSE_MAX (1000) and reported "1000 of
+# 1000 resolved", and Score them then refused with a 413 at 201 — the green light was a lie, and the
+# limit cost a round trip. The page reads the cap from /api/config; a hardcoded copy would drift and
+# bring exactly that back. **Assert an assignment, not a bare mention:** this comment contains the
+# string, so a looser pattern would be satisfied by its own prose (the trap in AGENTS.md).
+import json        # noqa: E402
+import tempfile    # noqa: E402
+os.environ.setdefault("CACHE_DIR", tempfile.mkdtemp())   # import core without touching the repo's cache/
+import core        # noqa: E402
+
+cfg = json.loads(core.route("GET", "/api/config", b"", "")[2])
+if cfg.get("max_input_items") != core.MAX_INPUT_ITEMS:
+    bad.append(f"/api/config does not publish max_input_items (got {cfg.get('max_input_items')!r})")
+    print("  MISSING: /api/config has no max_input_items equal to core.MAX_INPUT_ITEMS")
+elif not re.search(r"=\s*configCache\.max_input_items\b", js):
+    bad.append("index.html never reads max_input_items from /api/config")
+    print("  MISSING: the page never assigns configCache.max_input_items, so it cannot state the cap")
+else:
+    print(f"run cap: /api/config publishes max_input_items={core.MAX_INPUT_ITEMS} and the page reads it")
+
 # ---- the layout invariant no other check can see -------------------------------------------------
 # `.chartbox` is a flex item whose children are ALL absolutely positioned (thumbs, ticks, gridlines,
 # the axis line), so its automatic width is its content width — which is zero. A zero-width box sends

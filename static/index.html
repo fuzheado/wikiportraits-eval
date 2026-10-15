@@ -305,6 +305,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let jobId = null, timer = null, lastJob = null, lastLatency = null;
+let validatedCount = 0;   // entries the last Validate resolved; startRun() checks it against the cap
 let aboutCache = null;
 
 const fmt = (v, n = 3) => (v === null || v === undefined) ? "—" : Number(v).toFixed(n);
@@ -1213,6 +1214,7 @@ function clearResults() {
 // the resolved-inputs table belongs to the list that was just checked, so a new check clears it too
 function clearAll() {
   clearResults();
+  validatedCount = 0;                     // a stale count must never block the next list
   $("parsedbody").innerHTML = "";
   $("warnings").innerHTML = "";
   $("parseinfo").textContent = "nothing validated yet";
@@ -1287,22 +1289,45 @@ $("check").onclick = async () => {
       <td>${i + 1}</td><td>${esc(it.raw)}</td>
       <td>${it.ok ? esc(it.title) + (it.pageid ? ` <a href="https://commons.wikimedia.org/?curid=${it.pageid}" target="_blank" rel="noopener">↗</a>` : "") : `<span class="warn">${esc(it.error || "not found")}</span>`}</td>
       <td>${it.orig_w ? it.orig_w + "×" + it.orig_h : "—"}</td><td>${esc(it.license || "—")}</td></tr>`).join("");
+    const total = (d.items || []).length;
     const ok = (d.items || []).filter(i => i.ok).length;
-    $("parsedsummary").textContent = `resolved inputs — ${ok} of ${(d.items || []).length}`
+    validatedCount = total;                 // what startRun() checks the cap against
+    // The server refuses more than `max_input_items` per run with a 413, so say so HERE rather than
+    // let the user read "300 of 300 resolved" and discover the limit on the next click. The cap is the
+    // server's number, read from /api/config — never hardcoded here (tests/check_js.py asserts that).
+    // If the key is missing the page still works: it just falls back to the server's own refusal.
+    const cap = configCache.max_input_items;
+    const over = cap ? total > cap : false;
+    $("parsedsummary").textContent = `resolved inputs — ${ok} of ${total}`
       + ` (expand for the table)`;
     $("parsed").open = false;               // stay collapsed; the pill beside the buttons already counts
-    $("parseinfo").textContent = `${ok} of ${(d.items || []).length} resolved`
-      + (ok ? ` · up to ${ok} model call${ok === 1 ? "" : "s"}` : "");
+    $("parseinfo").textContent = `${ok} of ${total} resolved`
+      + (ok ? ` · up to ${ok} model call${ok === 1 ? "" : "s"}` : "")
+      + (over ? ` — over the ${cap}-per-run limit` : "");
     // say what the next click costs, before it is clicked
-    $("run").title = ok
-      ? `Send ${ok} photo${ok === 1 ? "" : "s"} to the model — one call each unless already cached`
-      : "";
+    $("run").title = over
+      ? `This list is ${total} photos and a run takes at most ${cap} — split it and score the parts`
+      : ok
+        ? `Send ${ok} photo${ok === 1 ? "" : "s"} to the model — one call each unless already cached`
+        : "";
     $("warnings").innerHTML = (d.warnings || []).map(w => `skipped “${esc(w.raw)}” — ${esc(w.reason)}`).join("<br>");
     setStage(ok === 0 ? "idle" : "checked");     // hand the blue highlight over to "Score them"
   } finally { $("check").disabled = false; }
 };
 
 async function startRun() {
+  // Refuse an over-cap list before anything else. askNewRun() below would ask to discard the previous
+  // run's cards and then we would refuse anyway, and the server would answer 413 — so the limit costs
+  // no round trip and no destroyed results. Validate has already shown the user this same number.
+  // `validatedCount` is 0 on the ?run=1 path (a link never validates), which is why a cache-only replay
+  // is unaffected; a share link cannot exceed the cap anyway (URL_LIST_HARD_MAX is ~130 filenames).
+  const cap = configCache.max_input_items;
+  if (cap && validatedCount > cap) {
+    $("jobstate").textContent = `that list is ${validatedCount} photos and a run takes at most `
+      + `${cap} — split it and score the parts`;
+    setStage("checked");
+    return;
+  }
   if (!(await askNewRun())) return;      // the previous run's cards are about to be discarded
   clearResults();
   setStage("running");
