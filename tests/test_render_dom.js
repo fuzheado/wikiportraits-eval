@@ -31,7 +31,7 @@ const ABOUT = {
     { title: 'What this app does', html: '<p>Every photo is sent once to <b>llm-clef-flash</b>.</p>' },
     { title: 'The exact request sent to Clef',
       html: `<pre>{\n  "model": "llm-clef-flash",\n  "state": "${STATE}"\n}</pre>` },
-    { title: 'The five questions, verbatim',
+    { title: 'The seven questions, verbatim',
       html: '<table><tr><td><code>quality</code></td><td><code>score</code></td>'
           + '<td>Overall photographic quality for use in an encyclopedia article<br>'
           + '<code>0</code> — unusable (blurred/miscropped)<br><code>4</code> — excellent</td></tr></table>' },
@@ -174,16 +174,22 @@ render(job([]));
 ok(itemsEl.children.length === 0, 'an empty job clears the list');
 
 // ---- 4b. composite, P(publish), rank order and candidate spread ------------------
-const fullAnswers = (ib, pub, face, eyes, pose) => ({
+const fullAnswers = (ib, pub, face, eyes, pose, unobs = 1) => ({
   infobox_ready: { noul: ib }, face_visible: { noul: face }, eyes_to_camera: { noul: eyes },
+  face_unobstructed: { noul: unobs },          // default 1 = clear, so existing fixtures are unchanged
   pose: { choice: pose || 'head_shoulders', confidence: 0.7,
           probabilities: { head_shoulders: 0.7, three_quarter: 0.2, group: 0.1 } },
   quality: { score: 2.5, confidence: 0.5, probabilities: { '2': 0.5, '3': 0.5 } },
   publish_ready: { choice: pub >= 0.5 ? 'publish' : 'pass', confidence: pub,
                    probabilities: { publish: pub, pass: Number((1 - pub).toFixed(3)) } },
 });
+// mirrors wiclient.composite(): min(face, eyes) x pose weight x obstruction factor. The factor is
+// 0.5 + 0.5 x P(clear), and an ABSENT answer means "not known" and costs nothing — which is why the
+// default above is 1 rather than 0.
+const OBSTRUCTION_FLOOR = 0.5;
 const comp = (a) => Math.min(a.face_visible.noul, a.eyes_to_camera.noul)
-  * ({ head_shoulders: 1.0, three_quarter: 0.9, full_body: 0.6, candid: 0.5, group: 0.25 }[a.pose.choice] || 0.5);
+  * ({ head_shoulders: 1.0, three_quarter: 0.9, full_body: 0.6, candid: 0.5, group: 0.25 }[a.pose.choice] || 0.5)
+  * (OBSTRUCTION_FLOOR + (1 - OBSTRUCTION_FLOOR) * ((a.face_unobstructed || {}).noul ?? 1));
 
 const graded = [
   ['File:Best.jpg', 11, 0.68, 0.88, 0.97, 0.90],
@@ -204,6 +210,21 @@ render(job(graded, { spread: { composite: spread([0.9, 0.5, 0.1]), publish_ready
                          wall_total_s: 1.8, poses: { head_shoulders: 3 }, n_429: 0 } }));
 const rowsNow = [...itemsEl.children];
 ok(rowsNow.length === 3, `three graded rows (got ${rowsNow.length})`);
+
+// The microphone answer has to be VISIBLE, not just counted: `renderBody` hardcodes the list of
+// questions it draws, so a new question can exist in the payload and never appear on the card — which
+// would make the composite's demotion unattributable.
+ok(/face unobstructed/.test(rowsNow[0].innerHTML),
+   'the card shows the face-unobstructed answer that the composite scales by');
+// renderBody() is a pure function, so call it directly: an extra render() here would replace lastJob
+// and break the spread/stats assertions below it (which is exactly what happened first time).
+const micCard = win.renderBody(item('done', { pageid: 14, title: 'File:Mic.jpg', raw: 'File:Mic.jpg',
+  result: { wall_s: 0.6, usage: {}, answers: fullAnswers(0.7, 0.9, 0.95, 0.9, 'head_shoulders', 0.12) },
+  composite: 0.4, publish_p: 0.9 }));
+ok(/face unobstructed/.test(micCard) && /0\.120/.test(micCard),
+   'and shows the low probability when something IS held in front of the face');
+ok(/a held mic or hand demotes the score/.test(micCard),
+   'and says what that number does to the score');
 ok(/#1/.test(rowsNow[0].textContent) && /Best\.jpg/.test(rowsNow[0].textContent),
    'the best photo is ranked #1');
 ok(/#3/.test(rowsNow[2].textContent) && /Weak\.jpg/.test(rowsNow[2].textContent),

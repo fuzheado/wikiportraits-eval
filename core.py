@@ -706,9 +706,11 @@ def about_payload() -> dict:
            "<p>Paste Wikimedia Commons file references (bare names, <code>File:</code> titles, "
            "page URLs, upload/thumbnail URLs, wikitext), and every photo is sent once to "
            "<b>llm-clef-flash</b> — Cloudflare's decision model, served by the Wikimedia "
-           "Foundation on LiftWing — with one fixed six-question schema. The app then ranks the "
-           "photos by a <b>composite</b> it computes itself from three of the answers (face "
-           "visible, eyes to camera, pose), and shows the model's own P(publish) and P(infobox) "
+           "Foundation on LiftWing — with one fixed schema of "
+           f"{len(QUESTIONS)} questions. The app then ranks the "
+           "photos by a <b>composite</b> it computes itself from four of the answers (face "
+           "visible, eyes to camera, pose, and whether anything is held in front of the face), "
+           "and shows the model's own P(publish) and P(infobox) "
            "beside it.</p>"
            "<p><b>Clicking the title</b> starts a new session — it asks first, then clears the list and the "
                   "run on screen; the chart view, thumbnail size and row order you chose are kept.</p>"
@@ -789,7 +791,7 @@ def about_payload() -> dict:
                   "question; <code>criteria</code> defines the allowed answers. Nothing else is "
                   "sent — no filename, no Commons metadata, no prompt engineering beyond these "
                   "strings.</p>")},
-        {"title": "The six questions, verbatim",
+        {"title": f"The {len(QUESTIONS)} questions, verbatim",
          "html": "<table><tr><th>question</th><th>type</th><th>instructions and allowed answers</th></tr>"
                  + "".join(f"<tr><td><code>{esc(q['id'])}</code></td>"
                            f"<td><code>{esc(q['type'])}</code></td><td>{q['html']}</td></tr>"

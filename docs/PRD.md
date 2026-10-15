@@ -71,7 +71,7 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F2 | Input check step: resolve each line, show what it became, warn on unparseable/ambiguous lines | shipped |
 | F3 | Per-wiki resolution (Commons and other Wikimedia wikis), normalisation and redirect mapping back to the pasted string | shipped |
 | F4 | Duplicate merging on `(wiki, case-folded title)` | shipped |
-| F5 | One scoring call per photo, fixed schema, results cached by `(wiki, pageid, sha1, schema, width)` | shipped (six questions since 2026-10-13) |
+| F5 | One scoring call per photo, fixed schema, results cached by `(wiki, pageid, sha1, schema, width)` | shipped (seven questions since 2026-10-14; six from 2026-10-13) |
 | F6 | Live progress: overall bar + per-photo state (`queued`/`downloading`/`ready`/`scoring`/`done`) + per-photo elapsed seconds while scoring | shipped |
 | F7 | Aggregate stats: mean/median/max per headline number, candidate spread, pose mix, tokens, median call time | shipped |
 | F8 | Reports in Markdown, JSON, CSV, PDF — downloadable mid-run, each showing the photo next to its evaluations | shipped |
@@ -92,6 +92,8 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F23 | **Plot the chart live**, as results land, so it doubles as the progress display instead of appearing only when the run ends; the axis stretches and thumbnails move rather than the chart arriving all at once | shipped |
 | F24 | **Fit the chart axis to the candidates** (top 12) as well as the whole field, so the photos a reader can use get the full width instead of being stacked deepest — measured on 100 photos, the top 9 need 9 lanes on the whole-field axis and 2 when fitted | shipped |
 | F25 | **Summarise a clump too deep to draw** in a `+N` chip that names what it stands for, rather than letting a band grow without limit or hiding photos silently; placement is best-first so the top of a clump is never the summarised part | shipped |
+| F26 | **Toggle the chart's axis scale** between even spacing and a top-weighted bend (`x = t²`) — the direction that gives the best photos room. A *logarithmic* axis is the opposite direction on a 0→1 range and is deliberately not offered | shipped |
+| F27 | **Demote — not disqualify — a photo with something held in front of the face** (microphone, hand, phone), via its own model question folded into the composite as a bounded 0.5–1.0 factor | shipped |
 
 ## 6. Non-functional requirements
 

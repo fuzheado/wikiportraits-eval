@@ -7,7 +7,7 @@ WikiPortraits events produce thousands of photographs, and the hard part is not 
 them — it is choosing. This tool puts every photo in front of **Clef**, Cloudflare's open-weight
 **decision model**, served by the Wikimedia Foundation on
 [LiftWing](https://wikitech.wikimedia.org/wiki/Machine_Learning/LiftWing/Large_Language_Models).
-Clef writes no prose: it returns a probability for each of six specific questions about the picture,
+Clef writes no prose: it returns a probability for each of seven specific questions about the picture,
 and the tool sorts the photos so the strongest candidates are at the top.
 
 **Live:** <https://wikiportraits-eval.toolforge.org> · code:
@@ -84,8 +84,12 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    the top 9 spanned 0.052 of composite — 52 px wide and **9 deep** on the whole-field axis, and **one
    row** once fitted. If a stack still goes deeper than 8, the rest is summarised in a `+N` chip rather
    than drawn on top of itself; hovering the chip names the best of the photos it stands for, and every
-   one of them still has a card in the ranked list. **thumbnail size** scales the chart for a
-   projector or a phone. The PDF export follows both the view and the axis.
+   one of them still has a card in the ranked list. **scale** is *linear* (even spacing) or
+   **top-weighted**, which bends the placement to `x = t²` so the upper range gets most of the width;
+   the caption says so, because an unlabelled bent axis misreads the spacing. Note that a *logarithmic*
+   axis is the opposite of this and is deliberately not offered — on 0→1 it hands the **lower** half
+   74 % of the width, which is the crowding it sounds like it would cure. **thumbnail size** scales the
+   chart for a projector or a phone. The PDF export follows the view, the axis and the scale.
    **The PDF export follows this choice** — with *by pose* selected, the
    report's chart is the same labelled strata rather than the combined axis.
 
@@ -193,7 +197,7 @@ licence, Commons link), the run's `spread` and `stats`, and links to the four re
 
 ## What the numbers mean
 
-Six questions are asked in one pass; the model generates no text, it returns probabilities. Three
+Seven questions are asked in one pass; the model generates no text, it returns probabilities. Three
 headline numbers come out of them, and they are not the same kind of thing:
 
 - **composite** — *our* arithmetic, not the model's: `min(face_visible, eyes_to_camera) × pose
