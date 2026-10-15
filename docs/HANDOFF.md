@@ -234,13 +234,25 @@ fails the suite instead of shipping.
   count tracks the 640-wide geometry, not the bytes on the wire. So the requested width buys *no*
   tokens: the 960 rendition we download is discarded by the encoder, and requesting 1280 costs 80 %
   more bytes (916,726 vs 510,421) for an identical call. Token counts are deterministic per aspect
-  ratio for the **six-question** schema — exact, read off the cache: 983 (3:2), 1,023 (4:3), 1,123
-  (1:1), 1,323 (2:3); 16:9 would be 943 by the same arithmetic, but no 16:9 photo is cached, so that
-  one is inferred. The `865/905/1,045/1,245` table this file used to carry is the **five-question**
-  schema — DEVELOPER-NOTE-v0.4.1 §2 measured the added question at **+78 tokens** of instructions —
-  so the live count is *old table + 78*, which holds exactly on all three ratios the cache can check.
-  Diffing the two therefore looks like a 78-token model regression when nothing has changed: it is
-  the sixth question. `usage.output_tokens` is always 0; this model writes no text.
+  ratio — exact, read off the cache — and the table below is the current **seven-question** schema
+  (`face_unobstructed` added 2026-10-14), with the six- and five-question counts beside it so a diff
+  against an old run can be read rather than mistaken for drift:
+
+  | aspect | 7 questions (live) | 6 questions | 5 questions |
+  |---|---|---|---|
+  | 3:2 | **1,084** | 983 | 905 |
+  | 4:3 | **1,124** | 1,023 | 945 |
+  | 1:1 | **1,224** | 1,123 | 1,045 |
+  | 2:3 | **1,424** | 1,323 | 1,245 |
+  | 16:9 | *1,044 inferred* | *943 inferred* | *865 inferred* |
+
+  Each added question costs **+101 tokens** of instructions (measured: 1,323→1,424, 983→1,084,
+  1,123→1,224 — the same delta on all three ratios the cache can check). The five-question column is
+  DEVELOPER-NOTE-v0.4.1 §2's `+78` for `publish_ready`; the six-question column is the old count for
+  the same five plus `publish_ready`. **A token-count diff against an older run is therefore a schema
+  change, not a model regression** — check which question set produced each number before drawing any
+  conclusion. The 16:9 row is inferred by the same arithmetic; no 16:9 photo is cached.
+  `usage.output_tokens` is always 0; this model writes no text.
 - **`#` in a title silently truncates** (`File:X#1.jpg` → `File:X`). The parser truncates and warns.
 - **`Datei:`/`Fichier:`/`Archivo:` are not Commons aliases**; they belong to de/fr/es wikis.
   `upload.wikimedia.org/wikipedia/<project>/…` names the wiki in the path — resolve on that wiki.
