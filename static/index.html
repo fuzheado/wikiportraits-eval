@@ -26,6 +26,12 @@
   button.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
   button:disabled{opacity:.5;cursor:not-allowed}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  /* The share-link / API-command buttons: a narrow stacked column, so the URL box beside them gets
+     the width and the row stays short. They used to be two full-size buttons on their own line, next
+     to a box that inherited the global `textarea{min-height:150px}` and so sat mostly empty. */
+  .sharebtns{display:flex;flex-direction:column;gap:6px;flex:0 0 auto;align-self:flex-start;
+             min-width:124px}
+  .sharebtns button{width:100%}
   .grow{flex:1}
   .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);
         background:#eef2f7;color:var(--muted)}
@@ -282,10 +288,12 @@
       <button id="dl-pdf" disabled>PDF</button>
     </div>
     <div class="row" id="sharerow" style="margin-top:8px" hidden>
-      <button id="share" title="A single link that reproduces this run: the same list, the same view, replayed from saved answers so opening it cannot spend a model call">Copy share link</button>
-      <button id="apilink" title="A ready-to-paste curl command that evaluates this exact list through the HTTP API and prints the ranked JSON">Copy API link</button>
-      <textarea id="shareurl" readonly spellcheck="false" rows="3"
-             style="flex:1 1 320px;font:12px ui-monospace,Menlo,monospace;padding:6px 8px;border:1px solid var(--line);border-radius:8px"
+      <div class="sharebtns">
+        <button id="share" class="csize" title="A single link that reproduces this run: the same list, the same view, replayed from saved answers so opening it cannot spend a model call">Copy share link</button>
+        <button id="apilink" class="csize" title="A ready-to-paste curl command that evaluates this exact list through the HTTP API and prints the ranked JSON">Copy API link</button>
+      </div>
+      <textarea id="shareurl" readonly spellcheck="false" rows="2"
+             style="flex:1 1 260px;min-height:44px;max-height:110px;font:12px/1.4 ui-monospace,Menlo,monospace;padding:6px 8px;border:1px solid var(--line);border-radius:8px"
              placeholder="…"></textarea>
     </div>
     <div id="items" style="margin-top:12px"></div>
