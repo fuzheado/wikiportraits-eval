@@ -112,10 +112,41 @@ try:
     # and the cap the page is told about is the one enforced here
     c, b = call("GET", "/api/config")
     cfg = json.loads(b)
-    print("GET /api/config ->", {k: cfg.get(k) for k in ("max_input_items", "eval_max", "parse_max")})
+    print("GET /api/config ->", {k: cfg.get(k) for k in ("max_input_items", "eval_max", "parse_max",
+                                                         "max_body_bytes")})
     assert cfg["max_input_items"] == core.MAX_INPUT_ITEMS, cfg.get("max_input_items")
+    assert cfg["max_body_bytes"] == core.MAX_BODY_BYTES, cfg.get("max_body_bytes")
 finally:
     (core.MAX_INPUT_ITEMS, core.CACHE_DIR, wiclient.resolve, wiclient.score_image,
      wiclient.probe_endpoint, wiclient.SPACING) = saved
+
+# --- the request-body ceiling, on the WSGI path -------------------------------------------------
+# The same guard as the http.server backend, from the same helper: a limit that exists in one code
+# path and not the other is not a limit (docs/HANDOFF.md §4).
+saved_cap = core.MAX_BODY_BYTES
+core.MAX_BODY_BYTES = 200
+try:
+    c, b = call("POST", "/api/parse", b"x" * 500)
+    d = json.loads(b)
+    print("POST /api/parse (500 bytes, cap 200) ->", c["status"], d.get("error", "")[:70])
+    assert c["status"].startswith("413"), (c["status"], d)
+    assert "200" in d["error"], d["error"]          # the message names the limit
+
+    c, b = call("POST", "/api/parse", json.dumps({"text": "File:A.jpg"}).encode())
+    print("POST /api/parse (under the cap) ->", c["status"])
+    assert c["status"].startswith("200"), (c["status"], b[:120])
+finally:
+    core.MAX_BODY_BYTES = saved_cap
+
+# --- malformed input is the caller's fault, wherever it arrives from ------------------------------
+c, b = call("POST", "/api/parse", b'{"text": "unterminated')
+d = json.loads(b)
+print("POST /api/parse (malformed JSON) ->", c["status"], d.get("error", "")[:60])
+assert c["status"].startswith("400"), (c["status"], d)      # was 500 through the blanket handler
+
+c, b = call("POST", "/api/parse", json.dumps({"text": ["File:A.jpg"]}).encode())
+d = json.loads(b)
+print("POST /api/parse (text is a list) ->", c["status"], d.get("error", "")[:60])
+assert c["status"].startswith("400"), (c["status"], d)      # raised inside the parser before
 
 print("\nWSGI shim OK")

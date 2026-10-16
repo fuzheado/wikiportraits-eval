@@ -42,6 +42,7 @@ RUN = [
     "test_forms.py",
     "test_commas.py",
     "test_wsgi.py",
+    "test_body_limits.py",      # the http.server layer: version header, body cap, read timeout
     "test_pipeline.py",
     "test_reports.py",          # writes /tmp/wpc_report_test/report.pdf, which check_pdf.py reads
     "test_thumb_width.py",
