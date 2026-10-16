@@ -302,7 +302,11 @@ reports 960 as its width), `SPACING` (0.9 s between call *starts*, global across
 `INFLIGHT` streams), `INFLIGHT` (**2** — at most two concurrent model calls within a run; call *starts* stay `SPACING` apart globally, so the second worker only overlaps a call that outlasts `SPACING`. It is therefore inert at healthy speeds and worth ~1.8× once the endpoint degrades. `INFLIGHT=1` restores strict serial; 4 streams is measurably worse — `docs/HANDOFF.md` §7.1), `HOURLY_BUDGET` (100 — the app's *own* courtesy cap, not the platform's: see **Be a good citizen**),
 `MAX_PARALLEL_JOBS` (2), `MAX_INPUT_ITEMS` (200 images per run — *Validate files* states it from
 `/api/config`, so a longer list is refused at Validate rather than at the first click of *Score them*),
-`PARSE_MAX` (1000 per parse),
+`PARSE_MAX` (1000 per parse), `MAX_BODY_BYTES` (1048576 — the request-body ceiling both backends
+check *before* reading a byte, and publish in `/api/config`; 1 MiB is ~10× the largest body this app
+legitimately receives, and without it a 32 MiB POST is simply buffered — `docs/HANDOFF.md` §4),
+`BODY_READ_TIMEOUT` (30 s — how long a request body may take to arrive; a client that declares
+10 MiB and sends 1 KiB gets a 408 instead of holding a worker),
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
 `PROBE_TTL` (600 s, how long a pre-flight verdict is reused), `CACHE_DIR` (`./cache`),

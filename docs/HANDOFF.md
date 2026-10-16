@@ -54,6 +54,9 @@ python3 tests/test_commas.py             # file names containing commas
 python3 tests/test_wsgi.py               # WSGI entry point + the run cap at its boundary. The resolver
                                          # is STUBBED here, so it makes no Commons call — it did until
                                          # 2026-10-16, which made CI's "offline" job network-dependent
+python3 tests/test_body_limits.py        # the http.server layer: the version it advertises, the body
+                                         # ceiling (refused before a byte is read), the read timeout,
+                                         # and malformed input answering 400 rather than 500
 python3 tests/test_pipeline.py           # download/scoring overlap, state machine, and the whole retry
                                          # policy: 5xx backoff, 429, the breaker, the failing pre-flight
 python3 tests/test_reports.py            # composite, P(publish), spread, thumbnails in MD/PDF
@@ -264,6 +267,38 @@ thumbnail-saving helper, which degraded silently to "no thumbnail in the report"
 test suite pass. Worker-level handlers catch `OSError` and let coding errors raise — and
 `test_pipeline.py` now asserts that every scored photo has a saved thumbnail, so a silent regression
 fails the suite instead of shipping.
+
+**Nothing capped the request body, and Toolforge did not cap it either (measured 2026-10-16).** A
+sweep against the *live deployment* — malformed bodies so the app answered immediately, no Commons or
+model call made — found the ingress accepting **1 KiB to 32 MiB** without a single 413, and the app
+buffering whatever it was given: `app.py` read `int(Content-Length)` bytes into memory, in a 512 MiB
+container, with no ceiling anywhere. Measured cost of that buffering, on a local instance: base RSS
+24.7 MiB → **+11.8 MiB for a 16 MiB body, +27.8 MiB for 32 MiB**, retained after the request (the
+allocator does not hand it back), and `ThreadingHTTPServer` spawns a thread per connection, so
+concurrent large bodies multiply it. Three consequences worth keeping:
+
+- **The size a real batch wants is near the edge.** Our genuine per-image cost is a **165 KB median**
+  thumbnail (960 px ladder step — the exact bytes the model receives), ~220 KB once base64'd, so
+  **200 photos ≈ 32 MiB raw / ~43 MiB base64 as one body**, and 1000 ≈ 161 / 215 MiB. One body per
+  batch is therefore the worst shape available; per-image requests stay ~100-200 KB and cost no
+  measurable RSS.
+- **`Content-Length` is a claim, not a fact.** `rfile.read(n)` waits for exactly n bytes, so a client
+  that declares 10 MiB and sends 1 KiB held the worker — locally *and* on Toolforge, neither of which
+  cut it off within 8–12 s (untested beyond that; a platform timeout may exist at ~60 s). The fix is
+  `MAX_BODY_BYTES` (checked before the read, so an over-cap body is refused unread) plus
+  `BODY_READ_TIMEOUT` (30 s) answering **408**. Both are in `app.py` *and* `wsgi.py` through
+  `core.body_too_large()`, because a limit in only one backend is not a limit.
+- **A malformed body was a 500.** `json.loads` raised inside `route()` and the blanket handler at the
+  bottom turned it into `{"error": "server error"}` — a client fault reported as a server fault, on
+  the one route an integrator is most likely to hit first. Now 400, naming what was wrong. The same
+  sweep found two siblings with the identical shape: a JSON **array** body (`["File:A.jpg"]`) and a
+  **non-string `text`** (`{"text": 12345}` or a list) both died inside `re.split` and returned 500;
+  both are 400 now, and the message points a caller with an array at `/api/eval`, which does take one.
+  A `null` text is deliberately left alone — an empty box is a fair thing to send.
+- **`Server:` advertised a hardcoded version.** `app.py` said `WikiPortraitsEval/0.4` while
+  `/api/about` reported 0.20.1 — the same drift the User-Agent had before commit 0.20.3 pointed it at
+  `APP_VERSION`. Now built from `core.APP_VERSION`, and asserted by `test_body_limits.py`, so the
+  header cannot drift again silently.
 
 - **Do not judge a question by its overall spread.** sd rises whenever answers move toward 0 or 1,
   including when they all pile up at the *ceiling*. On the same four photos, a reworded question took
@@ -797,6 +832,10 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
 | 429s | budget: stop, wait for the top of the hour, or run from Toolforge; check the UI budget line |
 | Run stops at once, rows say "endpoint pre-flight failed" | the text-only probe failed — the endpoint is down or erroring; run `tools/probe_latency_now.py` to confirm before touching the app. This is the `EngineCore` failure mode `T440223` documents (§13) |
 | Scores look wrong after a schema edit | the schema hash forces fresh calls; old cached values belong to the old wording |
+| A request is answered `413 … accepts at most N (MAX_BODY_BYTES)` | the body exceeded the ceiling; that is the app refusing it *before* reading, and the number in the message is the live limit (`/api/config` → `max_body_bytes`). Send a shorter list, or per image instead of one big body (§4) |
+| A request is answered `408 timed out reading the request body` | the client declared a `Content-Length` larger than what it sent; the server waited `BODY_READ_TIMEOUT` (30 s) and gave up. Usually a client bug — a wrong length or a body built shorter than its header claims |
+| A POST that is not valid JSON answers 400, not 500 | by design since 2026-10-16: a bad body is the caller's to fix (`test_body_limits.py` asserts it). A 500 here would be a regression to the blanket handler in `core.route()` |
+| `Server:` header disagrees with `/api/about`'s `app_version` | it is built from `core.APP_VERSION` (since 2026-10-16) — a disagreement means a stale process, not a stale constant |
 | A run never finishes, stuck at n-1 of n | look for `Exception in thread` in the server log — a dead producer thread blocks the pipeline; this is not necessarily endpoint latency (see §4) |
 | Numbers present in the job object but missing on the wire | check the field is set *before* the payload is built; per-photo values are refreshed by `_refresh_derived()` on every settle |
 | A question wording "looks better" but the tool ranks worse | candidate range, not sd — read §11 |
