@@ -78,13 +78,13 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F9 | About panel: verbatim prompt, question legend, answer semantics, limits, data flow, provenance | shipped |
 | F10 | Latency verdict per run (`normal`/`elevated`/`service-side`) against a measured baseline | shipped |
 | F11 | Budget/rate-limit display and stop-on-429 behaviour with a single retry; and a bounded, paced retry (default 3 attempts, exponential backoff) on a transient gateway 5xx, with a run-level circuit breaker after 5 consecutive failures | shipped |
-| F12 | Paste a `Category:` name and score its members | **not shipped** (see roadmap) |
+| F12 | Paste a `Category:` name and score its members | **not shipped** (see roadmap; issue #1) |
 | F13 | Persist runs and compare two runs (deltas per photo) | **not shipped** |
 | F14 | Calibrated threshold derived from labelled data | **not shipped** (0.5 today is a reporting convenience) |
 | F15 | Show a rank within the run next to each photo, and a percentile | **rank shipped**, percentile pending |
 | F16 | Report candidate spread for the run (range and ordering among plausible candidates) | shipped |
-| F17 | Accept a **PagePile** ID (or a PetScan/SPARQL-produced list) as the input source, with an explicit member cap and a confirmation step | **not shipped** (see roadmap) |
-| F18 | Accept a Commons **category** (optionally with depth) as the input source, with a cap, an explicit ordering rule and a confirmation step | **not shipped** (see roadmap) |
+| F17 | Accept a **PagePile** ID (or a PetScan/SPARQL-produced list) as the input source, with an explicit member cap and a confirmation step | **not shipped** (see roadmap; API verified 2026-10-16 — issue #5) |
+| F18 | Accept a Commons **category** (optionally with depth) as the input source, with a cap, an explicit ordering rule and a confirmation step | **not shipped** (see roadmap; counts and traps measured 2026-10-16 — issue #1) |
 | F19 | Accept a **Commons search / SDC query** as the input source (`srsearch=`, e.g. `haswbstatement:P180=Q…` for "every photo of this person") | **not shipped** (see roadmap) |
 | F20 | Accept a **PetScan PSID** as the input source — one integration that inherits categories, depth, templates, search and SPARQL, with union/subset/difference | **not shipped** (see roadmap) |
 | F21 | Accept an uploaded **list file** (`.txt`/`.csv`) in the browser, for sets too long to travel in a URL | **not shipped** (see roadmap) |
@@ -94,6 +94,8 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
 | F25 | **Summarise a clump too deep to draw** in a `+N` chip that names what it stands for, rather than letting a band grow without limit or hiding photos silently; placement is best-first so the top of a clump is never the summarised part | shipped |
 | F26 | **Toggle the chart's axis scale** between even spacing and a top-weighted bend (`x = t²`) — the direction that gives the best photos room. A *logarithmic* axis is the opposite direction on a 0→1 range and is deliberately not offered | shipped |
 | F27 | **Demote — not disqualify — a photo with something held in front of the face** (microphone, hand, phone), via its own model question folded into the composite as a bounded 0.5–1.0 factor | shipped |
+| F28 | Accept **local image files** (file picker or drag-and-drop) as the input source: resized in the browser to the model's own width (640 px, never upscaled), sent **one image per request**, identified by the file's content hash, with **no image bytes kept server-side** | **not shipped** (issue #2) |
+| F29 | Accept a **wiki page, one section of it, or a single `<gallery>` block** as the input source, with which of the three stated explicitly rather than guessed | **not shipped** (issue #5) |
 
 ## 6. Non-functional requirements
 
@@ -113,6 +115,21 @@ Non-users: nobody is asked to *act* on the scores automatically. The app never e
   the prompt shown in the UI is generated from the same constants used for scoring.
 - **Privacy:** the app sends only image bytes and a fixed `state` string to WMF infrastructure; no
   names, no user accounts, no analytics, no third-party services.
+- **One image per request, never a batch.** A resource source (category, PagePile, page) expands to
+  titles, and each *photo* then travels as its own request to the model endpoint. The reason is
+  measured, not stylistic: Toolforge's ingress accepted a 32 MiB body with no 413, so a batch would
+  work mechanically — but the app buffers the whole body in a **512 MiB** container (measured
+  retention ≈ 0.9× of the body) while a run's genuine per-image cost is ~90–165 KB from Commons and
+  ~35–89 KB after a browser-side resize (n=3 WikiPortraits portraits, 640 px, JPEG q80). One body for
+  200 photos would be ~10–12 MiB local or ~32 MiB from Commons, and `ThreadingHTTPServer` spends a
+  thread per connection. The measured numbers and the two failure modes behind this rule are in
+  `docs/HANDOFF.md` §4.
+- **Privacy (local input, F28):** a local file is processed transiently and **only its numeric
+  answers are kept**, keyed by content hash — image bytes are never written to disk. Cloud Services
+  ToU §4.4 forbids accepting End User content unless it complies with the Wikimedia Licensing policy
+  (i.e. freely licensed or public domain), and §7.2 forbids collecting other Personal Information,
+  which its definitions section counts **biometric data** as. A cache of a photographer's unpublished
+  frames would be exactly that; an answer keyed by hash is not. See issue #2 for the full reading.
 - **Performance:** a cached photo costs ~0 s and 0 API calls; an uncached photo costs one call
   (~0.5 s warm; see §8 for the current endpoint condition).
 - **Accessibility:** keyboard-dismissable modal, semantic table/heading structure, no colour-only
