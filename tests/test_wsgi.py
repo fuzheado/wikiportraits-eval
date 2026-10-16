@@ -9,6 +9,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import wsgi
+import core      # noqa: E402  (for MAX_INPUT_ITEMS and the CACHE_DIR the run cap touches)
+import wiclient  # noqa: E402  (the resolver, which /api/parse reaches for)
+
+# `/api/parse` resolves through wiclient, i.e. it calls Commons for real. This suite is listed as
+# offline in CI, so stub the resolver: a Wikimedia outage or 429 must not be able to redden an
+# unrelated commit, and CI should not be making unrequested API calls at all. The stub keeps the
+# shape of a real reply (title, pageid, dimensions, licence) so the assertions below still mean
+# something.
+def _offline_resolve(titles):
+    return {(t.get("wiki") or "commons.wikimedia.org", t["title"]):
+            {"ok": True, "pageid": 1000 + n, "orig_w": 4000, "orig_h": 6000,
+             "mime": "image/jpeg", "license": "CC BY-SA 4.0"}
+            for n, t in enumerate(titles)}
+
+
+wiclient.resolve = _offline_resolve
 
 
 def call(method, path, body=b"", ctype="application/json"):
@@ -42,5 +58,64 @@ assert c["status"].startswith("404")
 c, b = call("POST", "/api/run", json.dumps({"text": ""}).encode())
 print("POST /api/run (empty) ->", c["status"], b.decode())
 assert c["status"].startswith("400")
+
+# --- the run cap at its boundary, through the HTTP layer ---------------------------------------
+# This is the boundary a user actually meets: *Validate files* may resolve up to PARSE_MAX (1000) while
+# a run accepts MAX_INPUT_ITEMS, so the next click used to answer 413 after a green light. Patching the
+# cap SMALL keeps the accepted side cheap (a real 200-photo run is ~3 minutes of SPACING) and proves
+# the guard reads `core.MAX_INPUT_ITEMS` at request time rather than baking a number in.
+#
+# Everything the run touches is stubbed, including the pre-flight: without that this test would call
+# LiftWing for real, which is exactly the sort of thing CI must never do.
+import tempfile  # noqa: E402
+import wiclient  # noqa: E402
+
+saved = (core.MAX_INPUT_ITEMS, core.CACHE_DIR, wiclient.resolve, wiclient.score_image,
+         wiclient.probe_endpoint, wiclient.SPACING)
+core.MAX_INPUT_ITEMS = 3
+core.CACHE_DIR = tempfile.mkdtemp(prefix="wp-wsgi-cap-")
+
+
+def _fake_resolve(titles):
+    return {(t.get("wiki") or "commons.wikimedia.org", t["title"]):
+            {"ok": True, "pageid": 9000 + n, "orig_w": 800, "orig_h": 600,
+             "mime": "image/jpeg", "license": "CC0"}
+            for n, t in enumerate(titles)}
+
+
+wiclient.resolve = _fake_resolve
+wiclient.score_image = lambda b64, budget: {"http": 200, "wall_s": 0.0, "ttfb_s": 0.0,
+                                            "usage": {"input_tokens": 900, "output_tokens": 0},
+                                            "answers": {}}
+wiclient.probe_endpoint = lambda: {"ok": True, "http": 200, "wall_s": 0.01, "error": None}
+wiclient.SPACING = 0.0
+try:
+    def names(n):
+        return json.dumps({"text": "\n".join(f"File:Cap {i}.jpg" for i in range(n))}).encode()
+
+    # one over the cap: refused, and the message must state the limit and the count.
+    # Do this BEFORE starting a run — /api/run checks MAX_PARALLEL_JOBS first, so an in-flight job
+    # answers 409 "another run is already in progress" and the cap is never reached (which is also
+    # worth knowing: a user with a run going gets 409, not 413).
+    c, b = call("POST", "/api/run", names(4))
+    d = json.loads(b)
+    print("POST /api/run (4 items, cap 3) ->", c["status"], d.get("error"))
+    assert c["status"].startswith("413"), (c["status"], d)
+    assert "3" in d["error"] and "4" in d["error"], d["error"]
+
+    # at the cap: accepted (asserted from the response, not by waiting — the worker is a daemon thread)
+    c, b = call("POST", "/api/run", names(3))
+    d = json.loads(b)
+    print("POST /api/run (3 items, cap 3) ->", c["status"], {k: d.get(k) for k in ("job_id", "total")})
+    assert c["status"].startswith("200") and d.get("total") == 3, (c["status"], d)
+
+    # and the cap the page is told about is the one enforced here
+    c, b = call("GET", "/api/config")
+    cfg = json.loads(b)
+    print("GET /api/config ->", {k: cfg.get(k) for k in ("max_input_items", "eval_max", "parse_max")})
+    assert cfg["max_input_items"] == core.MAX_INPUT_ITEMS, cfg.get("max_input_items")
+finally:
+    (core.MAX_INPUT_ITEMS, core.CACHE_DIR, wiclient.resolve, wiclient.score_image,
+     wiclient.probe_endpoint, wiclient.SPACING) = saved
 
 print("\nWSGI shim OK")

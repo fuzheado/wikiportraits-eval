@@ -22,30 +22,15 @@ if [ -n "$SKIP_HOOKS" ]; then
 fi
 
 fail=0
-for t in tests/test_forms.py tests/test_commas.py tests/test_wsgi.py tests/test_pipeline.py \
-         tests/test_reports.py tests/test_thumb_width.py tests/test_default_list.py \
-         tests/test_privacy.py tests/check_js.py tests/check_docs.py tests/check_compat.py \
-         tests/check_memo_refs.py; do
-  if ! out=$(python3 "$t" 2>&1); then
-    echo "pre-commit: $t FAILED"
-    printf '%s\n' "$out" | tail -20
-    fail=1
-  fi
-done
-
-# the DOM test needs jsdom, which lives in tests/ with its package.json. Ask node from THERE rather
-# than looking for a node_modules directory: looking for the directory once silently skipped a test
-# that was passing.
-if command -v node >/dev/null 2>&1; then
-  if (cd tests && node -e "require.resolve('jsdom')") >/dev/null 2>&1; then
-    if ! out=$(node tests/test_render_dom.js 2>&1); then
-      echo "pre-commit: test_render_dom.js FAILED"
-      printf '%s\n' "$out" | tail -20
-      fail=1
-    fi
-  else
-    echo "pre-commit: skipping test_render_dom.js — jsdom not resolvable (run: cd tests && npm install)"
-  fi
+# One inventory, in tests/suites.py, shared with CI and run_all_tests.sh. It used to be a list here, a
+# different list in the workflow and a third in run_all_tests.sh — and they had drifted (a suite that
+# ran nowhere, a PDF check with no assertions). It also refuses to let a suite exist unclassified.
+if ! out=$(python3 tests/suites.py 2>&1); then
+  echo "pre-commit: suites FAILED"
+  printf '%s\n' "$out" | tail -30
+  fail=1
+else
+  printf '%s\n' "$out" | grep -E '^(  skip|result:)' || true
 fi
 
 [ "$fail" = 0 ] || exit 1

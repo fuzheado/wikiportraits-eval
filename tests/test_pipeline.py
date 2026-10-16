@@ -353,6 +353,91 @@ try:
     if j3["items"][0]["status"] != "error":
         failures.append("a 400 should still be reported as an error")
 
+    # --- 429: the app's *stated* brake against overuse, and until 2026-10-16 the only branch of this
+    # policy with no test at all. Retry, no-retry and the breaker were covered; the one that protects a
+    # shared endpoint was not. The rule (core._score_item): ONE retry, and a second 429 is returned
+    # as-is. It consumes its own budget — not UPSTREAM_MAX_ATTEMPTS — because the two are independent.
+    gw_429 = {"http": 429, "wall_s": 0.05, "error": "rate limited", "retry_after": "30",
+              "detail": '{"error":"rate limited, try again later"}'}
+
+    with fresh_cache():                          # 429 once, then 200
+        fake5, st5 = scripted([gw_429, ok_payload()])
+        wiclient.score_image = fake5
+        j5 = run_one()
+    if st5["n"] != 2:
+        failures.append(f"a 429 should be retried exactly once (made {st5['n']} calls)")
+    if j5["items"][0]["status"] != "done":
+        failures.append(f"the photo should be scored once the 429 clears: "
+                        f"{j5['items'][0].get('error')!r}")
+    if not j5["items"][0].get("rate_limited"):
+        failures.append("the item must record that it was rate-limited — the UI and the reports "
+                        "count it (reports.stats n_429), so losing the flag hides throttling")
+    if j5["items"][0].get("upstream_attempts") != 2:
+        failures.append(f"a 429 retry should be counted: "
+                        f"{j5['items'][0].get('upstream_attempts')!r}")
+    if not any("one retry" in line for line in j5["log"]):
+        failures.append("the run log should say the 429 was retried")
+    if not any("wait 30s" in line for line in j5["log"]):
+        failures.append("the log should name the Retry-After the server asked for")
+    if (j5.get("retries") or {}).get("recovered") != 1:
+        failures.append(f"a recovered 429 should be reported like any other retry: {j5.get('retries')}")
+    if j5["stats"].get("n_429") != 1:
+        failures.append(f"the run stats should count 1 rate-limited photo: {j5['stats'].get('n_429')!r}")
+
+    with fresh_cache():                          # 429 twice: stop, do not loop
+        fake6, st6 = scripted([gw_429])
+        wiclient.score_image = fake6
+        j6 = run_one()
+    if st6["n"] != 2:
+        failures.append(f"a second 429 must stop, not retry again (made {st6['n']} calls — "
+                        f"UPSTREAM_MAX_ATTEMPTS={wiclient.UPSTREAM_MAX_ATTEMPTS} must NOT apply to 429)")
+    if j6["items"][0]["status"] != "error":
+        failures.append("a photo that stays rate-limited should end as an error")
+    if "429" not in (j6["items"][0].get("error") or ""):
+        failures.append(f"the item error should name the 429: {j6['items'][0].get('error')!r}")
+    if (j6.get("retries") or {}).get("still_failed") != 1:
+        failures.append(f"an unrecovered 429 should be reported: {j6.get('retries')}")
+
+    with fresh_cache():                          # 429, then a gateway 5xx, then 200
+        fake7, st7 = scripted([gw_429, gw_503, ok_payload()])
+        wiclient.score_image = fake7
+        j7 = run_one()
+    if st7["n"] != 3:
+        failures.append(f"the 429 and 5xx retry budgets are independent, so this needs 3 calls "
+                        f"(made {st7['n']})")
+    if j7["items"][0]["status"] != "done":
+        failures.append("the photo should still be scored after a 429 and then a 503")
+
+    # --- the cooldown itself, which the fakes above bypass ----------------------------------------
+    # They replace score_image, so `Budget.note_429` never runs and the shared-state contract is
+    # untested. It is the part that makes a 429 discipline rather than a retry: EVERY worker waits, and
+    # it expires. Asserted directly, plus the documented-but-nowhere-asserted fact that exceeding
+    # HOURLY_BUDGET does not refuse a call — so nobody "fixes" the display into a brake.
+    b = wiclient.Budget(limit=100)
+    if b.wait_seconds() != 0:
+        failures.append("a fresh Budget must not be blocked")
+    b.note_429("0.3")
+    if b.wait_seconds() <= 0:
+        failures.append("note_429 must block the very next call, for every worker")
+    if (b.status().get("last_429") or {}).get("retry_after") != "0.3":
+        failures.append(f"the Retry-After should be recorded for the UI: {b.status().get('last_429')!r}")
+    time.sleep(0.35)
+    if b.wait_seconds() > 0:
+        failures.append("the cooldown should expire with the Retry-After it was given (no sticky block)")
+    b2 = wiclient.Budget(limit=100)
+    b2.note_429(None)                            # the header can be absent entirely
+    if not (55 <= b2.wait_seconds() <= 61):
+        failures.append(f"a missing Retry-After should fall back to ~60s, not to zero "
+                        f"(got {b2.wait_seconds():.1f}s)")
+    b3 = wiclient.Budget(limit=0)                # limit deliberately exceeded
+    for _ in range(3):
+        b3.note_call()
+    if b3.used() != 3:
+        failures.append("Budget should count calls")
+    if b3.wait_seconds() != 0:
+        failures.append("exceeding HOURLY_BUDGET must NOT block a call — it is a display, not a brake "
+                        "(score_image's docstring says so; this assertion is what keeps that true)")
+
     # the circuit breaker: a mid-run outage must not cost MAX_ATTEMPTS x every remaining photo
     NFAN = 12
     with fresh_cache():
@@ -376,6 +461,53 @@ finally:
     wiclient.UPSTREAM_MAX_ATTEMPTS = real_max_attempts
     core.UPSTREAM_ABORT_AFTER = real_abort
     wiclient.score_image = fake_score
+
+# --- the endpoint pre-flight, on the FAILING path ----------------------------------------------
+# The harness pre-seeds _PROBE with ok=True at module level, so until 2026-10-16 the branch below had
+# never executed in CI: the behaviour during an outage — stop before spending the queue, mark every
+# pending photo honestly, keep the resolution already paid for — was only ever exercised by hand. That
+# is the branch that runs when the service is down, which is the worst moment to meet it for the first
+# time. score_image is replaced here too, so a regression makes this test *record* a call rather than
+# make a real one.
+real_probe = wiclient.probe_endpoint
+probe_seed = (core._PROBE.get("t"), core._PROBE.get("result"))
+try:
+    with fresh_cache():
+        spent = {"n": 0}
+
+        def must_not_run(b64, budget):
+            spent["n"] += 1
+            return ok_payload()
+
+        wiclient.score_image = must_not_run
+        wiclient.probe_endpoint = lambda: {"ok": False, "http": 503, "wall_s": 0.05,
+                                          "error": "gateway refused"}
+        core._PROBE.update(t=0.0, result=None)          # defeat the 10-minute verdict reuse
+        j8 = core.new_job("File:Down 1.jpg\nFile:Down 2.jpg")
+        core.run_job(j8)
+    if spent["n"] != 0:
+        failures.append(f"a failed pre-flight must not spend a single model call (made {spent['n']})")
+    if (j8.get("probe") or {}).get("ok") is not False:
+        failures.append(f"the job should carry the failed verdict for the UI: {j8.get('probe')!r}")
+    if not all(i["status"] == "error" for i in j8["items"]):
+        failures.append(f"every pending photo should be settled, not left mid-state: "
+                        f"{[i['status'] for i in j8['items']]}")
+    if not any("pre-flight" in (i.get("error") or "") for i in j8["items"]):
+        failures.append("the item error should blame the pre-flight, not the photo")
+    if not any("pre-flight FAILED" in line for line in j8["log"]):
+        failures.append("the run log should record the early stop")
+    if not any("stopping before spending the queue" in line for line in j8["log"]):
+        failures.append("the log should say the queue was NOT spent, so a reader is not left guessing")
+    # "nothing was scored" is in the per-photo error (where a reader meets it), not in the log — an
+    # assertion I got wrong the first time by assuming the two carried the same sentence.
+    if not any("nothing was scored" in (i.get("error") or "") for i in j8["items"]):
+        failures.append("the item error should say plainly that nothing was scored")
+    if not all(i.get("title") for i in j8["items"]):
+        failures.append("a failed pre-flight must keep the resolved titles — resolution is the part "
+                        "already paid for, and keeping it is what makes the retry cheap")
+finally:
+    wiclient.probe_endpoint = real_probe
+    core._PROBE.update(t=probe_seed[0], result=probe_seed[1])
 
 # --- the cache-only GET: the API twin of a share link, and why it is safe to hand out --------
 # A GET must be incapable of *spending*: it resolves the titles (one batched Commons call) and reads

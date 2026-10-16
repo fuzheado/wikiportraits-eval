@@ -1,11 +1,21 @@
 name: checks
 
-# Everything here is free and offline except `starter-list-live`, which makes exactly one Commons
-# API call and zero model calls — and is manual-only, because a Wikimedia outage or a 429 must
-# never turn an unrelated commit red.
+# What runs where is decided in ONE place: `tests/suites.py`, which CI, `.githooks/pre-commit` and
+# `tests/run_all_tests.sh` all call. That file also fails if a suite in tests/ is in none of its
+# classes, so a new test cannot be forgotten — the failure this replaces was real: test_pdf_images.py
+# ran nowhere, check_pdf.py ran in one runner only (and had no assertions, so it always "passed"), and
+# this workflow's own "offline" job made a live Commons call through test_wsgi.py.
 #
-# The two things this deliberately does NOT do: run a real scoring job (that costs quota against
-# T440223's service) and run test_ui_contract.py / verify_reports_live.py (they need a live server).
+# The jobs below are lanes over that one inventory, not separate lists:
+#   offline          everything except the DOM test, on the floor Python and the current one
+#   dom              the jsdom test alone (it is node-only, so the Python version is irrelevant)
+#   pdf              the whole inventory with the test-only PDF deps installed, so the two PDF suites
+#                    actually run somewhere (they need test_reports.py first; the inventory orders them)
+#   starter-list-live  manual only: one Commons API call, zero model calls
+#
+# What no job here does: run a real scoring job (that spends quota against T440223's service) or run
+# test_ui_contract.py / verify_reports_live.py (they need a live server). A Wikimedia outage or a 429
+# must never turn an unrelated commit red.
 
 on:
   push:
@@ -20,8 +30,8 @@ jobs:
       fail-fast: false
       matrix:
         # 3.9 is the floor this repo advertises (and what a plain `python3` on Toolforge may be);
-        # 3.12 catches "works on my machine" drift. The app is stdlib-only, so there is nothing to
-        # install.
+        # 3.12 catches "works on my machine" drift. The app is stdlib-only, so nothing to install
+        # except jsdom for the DOM suite — which this lane skips (see --without-js) and `dom` runs.
         python: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -33,20 +43,8 @@ jobs:
           node-version: "20"
       - name: what are we running
         run: python3 -V
-      - name: offline suites
-        run: |
-          python3 tests/test_forms.py
-          python3 tests/test_commas.py
-          python3 tests/test_wsgi.py
-          python3 tests/test_pipeline.py
-          python3 tests/test_reports.py
-          python3 tests/test_thumb_width.py
-          python3 tests/test_default_list.py
-          python3 tests/test_privacy.py
-          python3 tests/check_docs.py
-          python3 tests/check_compat.py
-          python3 tests/check_memo_refs.py
-          python3 tests/check_js.py          # needs node
+      - name: the offline inventory (writes the report PDF that the PDF lane reads)
+        run: python3 tests/suites.py --without-js
 
   dom:
     name: DOM test (jsdom)
@@ -59,8 +57,28 @@ jobs:
       - name: install jsdom
         working-directory: tests
         run: npm install
-      - name: run the DOM test
-        run: node tests/test_render_dom.js
+      - name: run the DOM suite via the inventory
+        run: python3 tests/suites.py --only-js
+
+  pdf:
+    name: PDF report (test-only deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # pypdf and pypdfium2 are test-only: the app is stdlib-only by design, and these must not become
+      # runtime deps. Installing them here is what makes the PDF suites runnable *somewhere* — before
+      # this job they ran nowhere, so `reports.py` shipped "six typed questions" in every downloaded
+      # PDF with nothing objecting.
+      - name: test-only PDF dependencies
+        run: pip install pypdf pypdfium2
+      - name: the whole inventory, PDF suites included
+        run: python3 tests/suites.py --without-js
 
   starter-list-live:
     name: starter list resolves on Commons (manual)

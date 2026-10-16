@@ -8,7 +8,7 @@ import urllib.error, urllib.parse, urllib.request
 # The app version lives here rather than in core.py because both need it: core reports it (About,
 # reports) and this module puts it in the default User-Agent. One source of truth — before this, the
 # UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
-APP_VERSION = "0.20.4"
+APP_VERSION = "0.20.5"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
     f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")
@@ -120,8 +120,19 @@ def publish_p(ans: dict):
     return None
 
 
+# The answers `composite()` actually consumes, named so the report's prose and its tests can be
+# generated from the list rather than restating a count. It is not a second source of truth: the PDF
+# said "our arithmetic on three model answers" for a day after the obstruction question landed, and
+# nothing objected, because the only PDF-text suite had no assertions (tests/check_pdf.py, 2026-10-16).
+COMPOSITE_INPUTS = ("face_visible", "eyes_to_camera", "pose", "face_unobstructed")
+
+
 def composite(ans: dict):
-    """min(face_visible, eyes_to_camera) x pose weight x the obstruction factor — ours, not the model's."""
+    """min(face_visible, eyes_to_camera) x pose weight x the obstruction factor — ours, not the model's.
+
+    The answers it consumes are named in `COMPOSITE_INPUTS`, so prose and tests can refer to that one
+    list instead of restating a count by hand.
+    """
     face = (ans.get("face_visible") or {}).get("noul")
     eyes = (ans.get("eyes_to_camera") or {}).get("noul")
     pose = (ans.get("pose") or {}).get("choice")

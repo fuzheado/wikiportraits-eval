@@ -139,14 +139,16 @@ def _method_block(model_note=""):
         "Model: llm-clef-flash (Cloudflare/clef-flash, 9.41 B params BF16, Apache-2.0) served by "
         "Wikimedia LiftWing at api.wikimedia.org/service/lw/inference/v1/models/llm-clef-flash:predict "
         "(KServe on HuggingFace transformers, not vLLM).",
-        "Schema: one state + six typed questions, all answered in a single forward pass; the model "
-        "generates no text (usage.output_tokens = 0). Question types: "
-        "face_visible (yes/no), pose (choice of 5), quality (score 0-4), infobox_ready (yes/no), "
-        "publish_ready (choice of 2: publish / pass), eyes_to_camera (yes/no).",
+        f"Schema: one state + {len(wiclient.QUESTIONS)} typed questions, all answered in a single "
+        "forward pass; the model generates no text (usage.output_tokens = 0). Question types: "
+        "face_visible (yes/no), face_unobstructed (yes/no), pose (choice of 5), quality (score 0-4), "
+        "infobox_ready (yes/no), publish_ready (choice of 2: publish / pass), eyes_to_camera (yes/no).",
         "Headline numbers: composite = min(face_visible, eyes_to_camera) x pose weight x obstruction "
         "factor, where the factor is 0.5 + 0.5 x P(the face is free of anything held in front of it). "
         "(head-and-shoulders 1.0, three-quarter 0.9, full body 0.6, candid 0.5, group 0.25). That is "
-        "our arithmetic on three model answers, NOT a model probability; P(publish) and P(infobox) "
+        # both counts are derived: they were hand-written here and went stale in this exact document
+        f"our arithmetic on {len(wiclient.COMPOSITE_INPUTS)} model answers "
+        f"({', '.join(wiclient.COMPOSITE_INPUTS)}), NOT a model probability; P(publish) and P(infobox) "
         "are the model's own. Ranking uses the composite.",
         "Spread: the run reports candidate spread (range and median gap among answers at or above "
         f"{wiclient.CANDIDATE_FLOOR}), not standard deviation — sd rises whenever answers pile up at "
