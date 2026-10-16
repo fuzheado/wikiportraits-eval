@@ -52,9 +52,14 @@ RUN = [
     "check_js.py",              # python, but shells out to `node --check`
     "check_memo_refs.py",
 ]
-NEEDS = {                       # name -> (the modules it needs, why the dependency is dev-only)
-    "check_pdf.py": (("pypdf",), "test-only dep; the app itself is stdlib-only by design"),
-    "test_pdf_images.py": (("pypdfium2",), "test-only dep; classifies the images inside the PDF"),
+NEEDS = {                       # name -> (every module it imports, why the dependency is dev-only)
+    # Every module the suite actually imports, not a subset: probing only `pypdf, pypdfium2` selected
+    # check_pdf.py on a machine without pillow, where it then died at `.to_pil()` — a suite that is
+    # *skipped* is honest, a suite that is selected and then crashes is a false red on someone's PR.
+    "check_pdf.py": (("pypdf", "pypdfium2", "PIL"),
+                     "test-only deps; the app itself is stdlib-only by design"),
+    "test_pdf_images.py": (("pypdfium2", "PIL"),
+                           "test-only deps; renders the PDF and classifies its images"),
 }
 JS = {
     "test_render_dom.js": (["node", "tests/test_render_dom.js"], "needs node + jsdom"),

@@ -71,12 +71,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      # pypdf and pypdfium2 are test-only: the app is stdlib-only by design, and these must not become
-      # runtime deps. Installing them here is what makes the PDF suites runnable *somewhere* — before
-      # this job they ran nowhere, so `reports.py` shipped "six typed questions" in every downloaded
-      # PDF with nothing objecting.
+      # pypdf, pypdfium2 and pillow are test-only: the app is stdlib-only by design, and these must
+      # not become runtime deps. Installing them here is what makes the PDF suites runnable
+      # *somewhere* — before this job they ran nowhere, so `reports.py` shipped "six typed questions"
+      # in every downloaded PDF with nothing objecting. `tests/suites.py` probes for all three and
+      # skips these suites loudly if any is missing (the first CI run of this lane caught that pair:
+      # the probe checked pypdf + pypdfium2, which import fine without pillow, and then `.to_pil()`
+      # failed — a skipped suite is honest, a selected-then-crashing one is a false red).
       - name: test-only PDF dependencies
-        run: pip install pypdf pypdfium2
+        run: pip install pypdf pypdfium2 pillow
       - name: the whole inventory, PDF suites included
         run: python3 tests/suites.py --without-js
 

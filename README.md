@@ -387,7 +387,7 @@ python3 tests/test_privacy.py      # the request log: no query, no IP, no UA (of
 python3 tests/check_js.py          # the inline script parses + cross-language constants agree (offline)
 python3 tests/check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
 python3 tools/probe_inflight_pacing.py         # offline, 0 API calls: proves when INFLIGHT>1 does anything
-.venv-pdf/bin/python tests/check_pdf.py        # the PDF's TEXT matches the live schema (venv: pypdf)
+.venv-pdf/bin/python tests/check_pdf.py        # the PDF's TEXT matches the live schema (venv: pypdf+pillow)
 .venv-pdf/bin/python tests/test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)
 node tests/test_render_dom.js      # the results list, ranking and spread in a DOM (needs `cd tests && npm install`)
 python3 tests/test_ui_contract.py [URL]        # live: UI wiring, payload fields, About content
