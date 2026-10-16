@@ -4,7 +4,7 @@ For the next developer or agent working on this. Everything here is either measu
 attributable to the sources named at the end. Read **docs/PRD.md** for *why* the product is shaped this
 way; this file is *what will bite you* and *what to do next*.
 
-App version 0.20.6 · stdlib Python only · last full test pass 2026-10-14 (3.9 and 3.12)
+App version 0.20.6 · stdlib Python only · last full test pass 2026-10-16 (3.9 and 3.12)
 
 ---
 
@@ -15,7 +15,7 @@ App version 0.20.6 · stdlib Python only · last full test pass 2026-10-14 (3.9 
 | `core.py` | routing (shared by both backends), job store, worker + prefetch thread, latency verdict, About payload |
 | `wiclient.py` | input parsing → `File:` titles, per-wiki Commons API resolution, thumbnail fetch, model call, budget/pacing |
 | `reports.py`, `pdfmin.py` | Markdown/JSON/CSV/PDF output; `pdfmin.py` is a dependency-free PDF writer |
-| `static/index.html` | the whole UI: incremental list rendering, per-row clock, latency panel, About modal |
+| `static/index.html` | the whole UI: incremental list rendering (invariant 3), the composite chart with its view / axis / scale controls, the detail popup (rank, prev/next, arrow keys), the prune controls for an over-cap list, per-row clock, latency panel, About modal |
 | | *Deep links:* `?list=` (newline-separated paste text, `%0A`) prefills; `&check=1` also presses Validate files, capped at 50 entries; `&run=1` starts a **cache-only replay** (never spends); `&view=pose\|combined` reproduces the chart view. The read-only API twin is `GET /api/eval?list=…`, which returns the same ranked JSON with **no model calls at all** (unscored photos come back as `uncached`); `POST /api/eval` is the one that scores. A GET that scores is refused on purpose — it would fire from link previews, crawlers and refreshes. The UI's **Copy share link** builds exactly this URL from a finished run. Over ~4,000 chars is refused. Never starts a run; params are stripped via `replaceState` so a reload cannot replay them. Caps are client-side only because the server caps independently (`PARSE_MAX`, `MAX_INPUT_ITEMS`) and never sees the query string. |
 | | *Section 2 is deliberately compact* (a 2026-10-14 report: "section 2 reads very busy and is overwhelming"). The run stats are **two one-line strips** — `Scores` (with `mean quality` folded in) and `Time & tokens` — not a grid of big boxes; **candidate spread is a collapsed `<details>`** whose one-liner still carries the candidate counts. Do not reintroduce the box grid or a 22px heading here; `test_render_dom.js` asserts two strips, no `statgroup`, and a closed `<details>`. |
 | | *Chart views:* `chartMode` is `combined` (default) or `pose`; `setChartMode()` persists it in localStorage and re-renders. By-pose gives every pose its own labelled band on a shared x axis with vertical gridlines, so photos can be compared *within* a pose; rank badges stay global so a photo keeps its number in both views. Tests assert 5 strata (empty ones included, as thin labelled lines), that gridlines appear only in pose mode, and that the default has neither. **The PDF export follows the same setting:** the UI appends `?view=pose` to the report URL, `route()` takes a `query` argument (both backends pass it; `path` stays query-free so deep links still route), `_report()` reads it into `meta[chart_view]`, and `reports.build_pdf(..., chart_view=)` draws the strata. Only the PDF takes the parameter; the other three formats ignore it. **The chart is drawn LIVE** (added 2026-10-14): `renderChart` used to `return` early unless `job.status` was `done` or `error`, so the chart area stayed empty until the run finished. It now plots whatever has landed and puts the running count in its caption (`axis 0 → 0.9 (best photo 0.75) · 9 of 12 scored so far`), which is what makes it double as the progress display — the rest of the page (stats strips, ranked cards, candidate spread) was already incremental, so the chart was the last thing that waited. **Because it now redraws on every poll, its thumbnails are created once into a keyed `Map` and patched in place** — the same rule as invariant 3, and the reason it is a slide rather than a flash. The axis is monotonic by construction (its input is the best composite *so far*, which results can only increase), so no thumbnail ever moves backwards; what it does is step in 0.1 jumps, which the CSS `transition` on `.cthumb` smooths. `test_render_dom.js` asserts: a running job plots, the node and its `<img>` are the same elements after later polls, `src` is assigned exactly once across three renders, the axis never shrinks, and a new run starts with an empty chart. **The axis has two modes** (`axisMode`, persisted): *whole field* is 0 → best+headroom, and **candidates** fits the axis to the top `CANDIDATE_WINDOW` (12) photos, which is the only thing that gives the usable ones room — measured on 100 real photos (2026-10-14) the top 9 spanned **0.052 of composite** and needed **9 lanes (834px)** of stacking on the full axis and **2 lanes (204px)** when fitted; in `test_render_dom.js` a 12-photo top band goes from 22px of spread to 754px and from 5 lanes to 1. **`CANDIDATE_WINDOW` is duplicated** in `reports.py` and `static/index.html` and nothing enforces that they match — the PDF must draw the same window the page showed, so change both. **The scale has two modes too** (`scaleMode`, persisted): *linear* (even spacing), and **top-weighted**, which bends the placement to `x = t^SCALE_EXPONENT` (2) so the upper range gets most of the width. The caption states the bend — `bent axis: x = t^2` — because an unlabelled nonlinear axis misreads the spacing, and tick labels are thinned by measured pixel width, since a bent axis crowds the low end by construction (0.1 lands at 1% of the width). `SCALE_EXPONENT` is a **third** constant duplicated with `reports.py` and checked by `check_js.py`. **A logarithmic axis is deliberately NOT offered, because it is the opposite direction:** on 0→1, `log10(1+9v)` hands the *lower* half **74 %** of the width and the upper half 26 %, so it would worsen exactly the crowding it sounds like it cures; `t^2` gives the upper half 75 %. Measured on the top 9 of 100 real photos (0.052 of composite): 9 lanes deep linear, 5 top-weighted, 2 in the candidates window. **Past `DRAWN_LANES` (8) the rest of a stack is summarised in a `+N` chip** rather than growing the band to thousands of pixels; the chip carries the count and names the best of the ones it stands for. Placement runs **best-first** (`[...items].reverse()`), which is what makes that cap safe: lanes fill in arrival order, so filling worst-first would have dropped exactly the top of each clump. |
@@ -23,7 +23,7 @@ App version 0.20.6 · stdlib Python only · last full test pass 2026-10-14 (3.9 
 | | *The detail popup shows the rank and walks the ranking* (0.20.6, asked for 2026-10-16: “it does not have the ranking in the display … since you know the ranking, you should be able to step forward or backwards”). It carries a `rank N of M` pill beside the title, `◀ prev` / `next ▶` buttons, and the **arrow keys**. Three deliberate choices: **(a)** the sequence is the *ranked* order wherever you opened from, not the row order on screen — triage wants best-next and the pill makes it unambiguous, and `rowOrder` is a display preference; **(b)** the ends **disable** rather than wrap, because wrapping jumps from the best photo to the worst and reads as a glitch; **(c)** lookup is by **title, never object identity** — a poll replaces every item object once a second (`lastJob = job`), so an identity-based lookup would drop the rank mid-run and the pill would flicker to “no rank”. `byRank()` is now the one comparator shared by the ranked list and the popup, so the pill cannot disagree with the badge you clicked to open it; `rankedDone()` is the sequence. An unscored photo shows its status instead of a rank and disables both arrows. `renderChart` keeps its own ordering on purpose: it drops photos with no composite because it cannot place them on the axis at all. |
 | | *UI state to keep:* `setStage(idle\|checked\|running\|done)` owns which button is blue and whether **Score them** is enabled — the blue highlight is the only thing telling a first-time user which step is next, and editing the list must send the flow back to `idle`. `test_render_dom.js` asserts the whole cycle. The input box must start empty (invariant 12). |
 | `default_list.txt` | the example list behind the UI's **Load sample list** button — 12 real Commons photos, one `File:` title per line. Served by `/api/default-list`, read at request time, so **replacing the file changes the default for everyone** with no code change. Never pre-loaded into the box (invariant 12). No comment lines: `#` is part of a Commons filename and the parser would treat a comment as a photo name (`test_default_list.py` enforces this). |
-| `docs/screenshot.png` | the README's lead image: a real 12-photo run (the composite-by-photo chart over the ranked cards). Generated by hand from the running app; refresh it when the UI changes shape, since a stale screenshot is worse than none — **refreshed 2026-10-14** from a real 12-photo run, so it now carries the `view:`, `axis:` and `scale:` controls — and it doubles as the only visual record that the chart's axis actually renders (see §4; no automated check can see that). |
+| `docs/screenshot.png` | the README's lead image: a real 12-photo run (the composite-by-photo chart over the ranked cards). Generated by hand from the running app; refresh it when the UI changes shape, since a stale screenshot is worse than none — **refreshed 2026-10-16** from a cache-only replay of the starter list (`?list=…&run=1`, so 12 photos and **zero model calls**), because the previous one predated the obstruction factor and showed cards saying `min(face, eyes) × pose weight` with no `face unobstructed` bar — i.e. it advertised a formula the app no longer computes. It carries the `view:`, `axis:` and `scale:` controls, and it doubles as the only visual record that the chart's axis actually renders (see §4; no automated check can see that). **Wait for the chart thumbnails to decode before capturing** (the images are `loading="lazy"`, so scroll the chart into view first): a capture taken as soon as the run finishes shows empty boxes where the photos should be. |
 | `.githooks/pre-commit` | delegates to `tests/suites.py` (the single inventory) on every commit, plus `tests/test_default_list.py --live` **only when `default_list.txt` is staged**. Enable per clone: `git config core.hooksPath .githooks`. Escape hatches: `SKIP_LIVE=1`, `SKIP_HOOKS=1`. |
 | `tests/suites.py` | **the inventory**: classifies every suite as RUN / NEEDS / JS / LIVE and refuses to let one exist unclassified. CI, the pre-commit hook and `run_all_tests.sh` all call it, so there is one list to keep, not three (they had drifted — see §2). |
 | `.github/workflows/checks.yml` | CI lanes over that inventory: the offline suites on Python 3.9 **and** 3.12, the jsdom DOM test, a PDF lane with the test-only deps, and a **manual-only** job that verifies the starter list on Commons (1 API call, 0 model calls). |
@@ -43,14 +43,35 @@ Run: `python3 app.py` (port 8765, or `PORT=…`). Restart helper: `python3 tools
 ## 2. Tests, and which ones cost API calls
 
 ```bash
-bash tests/run_all_tests.sh              # everything below, in order
-python3 tests/test_forms.py tests/test_commas.py tests/test_wsgi.py tests/test_pipeline.py tests/test_reports.py tests/test_thumb_width.py tests/test_default_list.py tests/test_privacy.py   # offline
-python3 tests/check_js.py                # offline: the page script parses (node --check)
-python3 tests/check_compat.py            # offline: nothing newer than the advertised 3.9 floor
-python3 tests/check_docs.py tests/check_memo_refs.py  # offline: docs exist & cite real files (free)
-node tests/test_render_dom.js            # offline (needs `cd tests && npm install` once — jsdom)
-.venv-pdf/bin/python tests/test_pdf_images.py       # renders a PDF back to PNG for eyeballing
-                                                    # (.venv-pdf: python3 -m venv .venv-pdf && .venv-pdf/bin/pip install pypdfium2 pypdf)
+python3 tests/suites.py                  # THE inventory: runs every offline suite and fails if one is
+                                         # unclassified. This is what CI, the hook and run_all_tests.sh run.
+python3 tests/suites.py --list           # what runs, what is skipped, and why
+bash tests/run_all_tests.sh [URL]        # the inventory + the live contract test (needs a server)
+
+# the individual suites, for when you are iterating on one — all offline, all reached by suites.py:
+python3 tests/test_forms.py              # input formats
+python3 tests/test_commas.py             # file names containing commas
+python3 tests/test_wsgi.py               # WSGI entry point + the run cap at its boundary. The resolver
+                                         # is STUBBED here, so it makes no Commons call — it did until
+                                         # 2026-10-16, which made CI's "offline" job network-dependent
+python3 tests/test_pipeline.py           # download/scoring overlap, state machine, and the whole retry
+                                         # policy: 5xx backoff, 429, the breaker, the failing pre-flight
+python3 tests/test_reports.py            # composite, P(publish), spread, thumbnails in MD/PDF
+python3 tests/test_thumb_width.py        # served width, ladder steps, cache keying
+python3 tests/test_default_list.py       # the starter list + the "run fresh" flag
+python3 tests/test_privacy.py            # the request log: no query, no IP, no UA
+python3 tests/check_js.py                # the page script parses (node --check) + the constants shared
+                                         # with reports.py agree, incl. the published run cap
+python3 tests/check_compat.py            # nothing newer than the advertised 3.9 floor
+python3 tests/check_docs.py tests/check_memo_refs.py  # docs exist & cite real files (free)
+node tests/test_render_dom.js            # the DOM (needs `cd tests && npm install` once — jsdom)
+
+# needs test-only deps — the app itself stays stdlib-only. suites.py skips these loudly when absent, and
+# CI's `pdf` lane installs the three so they run on every PR (before it existed, check_pdf.py ran in one
+# runner with no assertions and test_pdf_images.py ran nowhere at all: see the header of tests/suites.py).
+.venv-pdf/bin/python tests/check_pdf.py          # the PDF's TEXT matches the live schema — it ASSERTS
+.venv-pdf/bin/python tests/test_pdf_images.py    # renders the PDF back to PNG and classifies the images
+#   python3 -m venv .venv-pdf && .venv-pdf/bin/pip install pypdf pypdfium2 pillow
 python3 tools/verify_reports_live.py [URL]     # live: 3 photos end to end, all four reports, PDF rendered
 python3 tests/test_ui_contract.py [URL]  # live, but free when the files are already cached
 WANT=4 python3 tools/live_pipeline_check.py [URL]   # live and costs 1 call per fresh file (+1 pre-flight probe, cached 10 min)
@@ -708,8 +729,10 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
 ## 9. Where the knowledge lives
 
 - **Wikipedia-AI-Skills** (upstream, merged): `commons-file-resolution` SOP 6 — pasted references →
-  `File:` titles, the comma rule, the per-wiki batch query — plus the `tests/test_commons_file_resolution.py`
-  suite and `scripts/parse-file-refs.py`. PR #93, merge commit `b5c5b863`.
+  `File:` titles, the comma rule, the per-wiki batch query — plus that repo's
+  `tests/test_commons_file_resolution.py` suite and `scripts/parse-file-refs.py`. PR #93, merge commit
+  `b5c5b863`. (Paths on this line are in the *skills* repo, not this one — say so, because a bare
+  `tests/…` reads as local. An automated sweep for missing paths flagged exactly this.)
 - **Hermes skills:** `llm-endpoint-capability-audit` carries the session's research references —
   `references/clef-flash-2026-10.md` (model shape, caps, semantics), `references/liftwing-budget-and-image-prep-2026-10.md`
   (quota, thumbnail ladder, pacing), `references/liftwing-wikiportraits-suite-2026-10.md` (the schema
@@ -799,6 +822,8 @@ Full write-up, raw answers and chart: `research/wording-experiment-2026-10-13.md
    `min(face_visible, eyes_to_camera) × pose weight` (head-and-shoulders 1.0, three-quarter 0.9, full
    body 0.6, candid 0.5, group 0.25). `infobox_ready` is still asked and still shown, but it no longer
    orders the list. The composite must always be labelled as our arithmetic (invariant 8).
+   *As it stood on this date:* the obstruction factor joined the formula on 2026-10-14, so the current
+   definition is `… × pose weight × obstruction_factor` — see §4 and `wiclient.COMPOSITE_INPUTS`.
 3. **Candidate spread is reported per run** for all three headline numbers (composite, P(publish),
    P(infobox)) — candidates above the floor, range, median gap between neighbours, dead-zone share and
    the leading three titles. Never sd (invariant 9).
@@ -851,7 +876,9 @@ effectively tied. Rewording moves the pile-up from the middle to the ceiling.
    `min(face_visible, eyes_to_camera) × pose weight` (head-and-shoulders 1.0, three-quarter 0.9,
    full body 0.6, candid 0.5, group 0.25; widest corpus-level spread, sd 0.352 vs 0.229) or the
    two-option `choice` — and the composite must be labelled as *our arithmetic on three model
-   answers*, not a model probability.
+   answers*, not a model probability. *(Both counts are as they stood on 2026-10-13: the schema has had
+   seven questions and the composite four answers since 2026-10-14, and the PDF's prose is now derived
+   from `len(QUESTIONS)` and `COMPOSITE_INPUTS` so it cannot go stale again.)*
 5. Report **candidate spread** alongside the run and stop using sd as a proxy for question quality.
 6. Validate before shipping: 12+ portraits (today's wording vs the `choice` variant; the composite is
    free), then hand labels, measuring **ordering agreement rather than range**. Spread is not

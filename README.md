@@ -17,9 +17,9 @@ and the tool sorts the photos so the strongest candidates are at the top.
 It does not edit, tag or upload anything. It reads photos and tells you what a model thinks of them,
 with the model's exact questions shown to you.
 
-![The composite-by-photo chart above the ranked results: every thumbnail labelled with its rank,
-then one result card showing the score bars for composite, P(publish), infobox-readiness, face
-visibility, eye contact, pose and quality](docs/screenshot.png)
+![The composite-by-photo chart above the ranked results: every thumbnail labelled with its rank and
+score, then one result card showing the score bars for composite, P(publish), infobox-readiness, face
+visibility, whether the face is obstructed, eye contact, pose and quality](docs/screenshot.png)
 
 *A 12-photo run on the sample list. The chart places every photo on one axis; the cards below it
 show why each one scored as it did. The same run also exports as Markdown, JSON, CSV and PDF.*
@@ -200,6 +200,8 @@ POST /api/run    '{"text": …}'                               # async; poll GET
                  # add "no_cache": true to re-score every photo instead of reusing saved answers
                  # add "cached_only": true to replay from saved answers and never call the model
 GET  /api/default-list                                        # the sample list (default_list.txt)
+GET  /api/config                                              # model, pacing, caps, schema hash, cache stats
+                 # the run cap is published here (`max_input_items`) so the page can state it at Validate
 GET  /api/job/<id>/report.{md,json,csv,pdf}                   # reports for a finished job
                  # report.pdf?view=pose exports the by-pose chart rather than the combined one
 ```
@@ -414,13 +416,18 @@ run-to-run spread — so use it freely. For a latency-faithful number, run the s
 instead (0.327 s there vs 0.47–0.61 s from home). Numbers and method:
 `research/concurrency-2026-10-14.md`.
 
-**Two checks run automatically.** With `git config core.hooksPath .githooks` (once per clone), a
-pre-commit hook runs the offline suites on every commit — and verifies the starter list against
-Commons **only when `default_list.txt` is staged**, because a network check should never block an
-unrelated commit on Wikimedia being up. `SKIP_LIVE=1` and `SKIP_HOOKS=1` override it. The same split
-runs in CI (`.github/workflows/checks.yml`): offline suites on Python 3.9 and 3.12 plus the DOM test
-on every push, and the Commons check on demand. **Neither ever scores a photo** — that spends the
-hour's quota and calls a service that is still new (see `docs/HANDOFF.md` §13).
+**Two checks run automatically.** What runs where is decided in one place, `tests/suites.py`, which
+both call: it classifies every suite as offline / needs-a-test-dep / DOM / live, **refuses to let a
+suite exist unclassified** (adding a test means choosing where it runs), and skips a suite that needs a
+missing test-only dependency *loudly*, so a missing dependency cannot quietly un-cover something. With
+`git config core.hooksPath .githooks` (once per clone), a pre-commit hook runs that inventory on every
+commit — and verifies the starter list against Commons **only when `default_list.txt` is staged**,
+because a network check should never block an unrelated commit on Wikimedia being up. `SKIP_LIVE=1` and
+`SKIP_HOOKS=1` override it. CI (`.github/workflows/checks.yml`) runs four lanes over the same file: the
+inventory on Python 3.9 **and** 3.12, the DOM test, a PDF lane with the test-only PDF dependencies (so
+the PDF's own text is checked against the live schema on every push), and the Commons check on demand.
+**No lane ever scores a photo** — that spends the hour's quota and calls a service that is still new
+(see `docs/HANDOFF.md` §13). Running everything by hand: `python3 tests/suites.py`.
 
 ## Project documents
 
