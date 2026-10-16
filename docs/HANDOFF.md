@@ -483,6 +483,34 @@ concurrent large bodies multiply it. Three consequences worth keeping:
   It now takes `SKILLS_DIR` and reports that reference as *not verified here* when the clone is
   absent, instead of failing.
 
+**Enumerating a source is where a wrong title enters the run (measured 2026-10-16).** Five traps, all
+of them reproducible, all of them the kind that produce a plausible-looking run with junk in it:
+
+- **A category name does not say how big it is.** `Category:WikiPortraits` holds **221** files directly
+  and 18 subcategories; `deepcategory:WikiPortraits` returns **137,817**. So "ingest this category" is
+  221 or 138k depending on a decision nobody made out loud. Show the count first
+  (`prop=categoryinfo` is one cheap call) and treat depth as an explicit choice.
+- **`cmtype=file` combined with `cmsort=timestamp` leaks non-files.** It returned 8 files **plus two
+  `Category:` members** out of 10 members — reproduced twice — while the default sortkey behaved. Use
+  `cmnamespace=6` and assert `ns == 6` per row, or a `Category:` title goes into the resolver as if it
+  were a photo. (`cmsort=timestamp&cmdir=desc` itself is sound: members' timestamps match `imageinfo`'s
+  upload times to the second, spot-checked.)
+- **PagePile answers `500` for an id that does not exist** (ids 1, 2, 100, 1000, 99999999 all did), so a
+  bad id and a broken tool are indistinguishable from the status line. Never report that as "PagePile is
+  down" — name the id and say to check it. It also mixes namespaces in one pile: public piles carried
+  `Kategorie:`, `Diskussion:` and bare `Q…` entries, so filter to `File:`/ns 6 and state how many were
+  dropped. The useful half is `pages_total`: the size arrives **before** anything is spent.
+- **`prop=images` includes images pulled in by transcluded templates**, and `action=parse&section=N`
+  can return an empty image list for a section that only transcludes a gallery. If a page has no
+  `<gallery>` blocks of its own but `prop=images` is non-empty, say so rather than returning nothing —
+  and read the wikitext for the galleries, because they are the page author's *ordering*, not just a set
+  (PRD §9). Measured on `Commons:WikiPortraits`: 215 images via `prop=images`, 12 `<gallery>` blocks in
+  the wikitext, largest 29 entries.
+- **Which 200 of 1,240 is a product decision, and no cap makes it.** Newest-N is one call and matches
+  what event work wants; a uniform random sample is *not* "the best 200" (the UI already says so) and a
+  stratified sample spreads coverage but still understates the best of the population. Whichever rule
+  ships, it has to be named in the run log and the reports — see PRD §12.8 and issue #1.
+
 ## 5. The endpoint can be ~50× slower than its baseline — and that is not your bug
 
 Measured: warm calls (62 recorded, 2026-10-02 and 2026-10-12) had a **median of 0.54 s** and a worst
@@ -708,19 +736,33 @@ and a public tool should not be the thing that load-tests it.
 4. **Cache persistence on Toolforge** — the deployment runs `--mount=none`, so `cache/` is wiped on
    every webservice restart (re-scoring then costs one call per photo again). Options: deploy with
    the NFS mount and point `CACHE_DIR` at the tool home, or accept the wipe (WMCS origin is fast
-   when the endpoint is warm). Decide before the photo count grows.
+   when the endpoint is warm). Decide before the photo count grows. **This is now a prerequisite
+   rather than a nicety**: the plan for a big category (item 6) is to score it in parts, and every
+   restart in between makes the user pay for the same photos twice (PRD §13, issue #1).
 5. **Decide how the headline is presented** — research is done and the decision is pending (see §11).
    The evidence does *not* support swapping the question: today's `infobox_ready` separates candidates
    better than any rewrite tested. The cheap fix is presentational (rank + percentile within the run);
    any question change needs a 12+ portrait run and hand labels first.
 
 **Medium**
-6. **`Category:` / PetScan / SPARQL / PagePile input** with an explicit member cap and a confirmation
-   step ("Category:Foo has 1,240 files; score the first 200?"). The parser already warns instead of
-   guessing; this needs the UX, not the API work. **PagePile first** (PRD F17): it is one fixed-host
-   call with a numeric id (`pagepile.toolforge.org/api.php?action=get_data&id=<id>`), which is why it
-   is acceptable where a user-supplied `?listurl=` was refused — same feature shape, bounded target.
-   Reuse the `?list=` pattern: prefill the box and let a human press *Validate files*.
+6. **Input sources: PagePile (F17), page/section/gallery (F29), category with depth (F12/F18)** — all
+   with an explicit member cap and a confirmation step ("this pile has 1,240 files; score the first
+   200?"). The parser already warns instead of guessing; this needs the UX, not the API work. Traps that
+   bite during enumeration are in §4; the ordering rationale is in PRD §13; the live discussion is in
+   issues #1 and #5. **PagePile first**: one fixed-host call with a numeric id
+   (`pagepile.toolforge.org/api.php?action=get_data&id=<id>`, re-verified 2026-10-16, 0.16–0.19 s), and
+   `pages_total` hands you the count *before* anything is spent — which is the confirmation step, for
+   free. Reuse the `?list=` pattern: prefill the box and let a human press *Validate files*, so an id
+   can never spend on its own. **Category input is the one that needs something first** — "score it in
+   parts" is only honest while the cache survives a restart, so settle item 4 before promising a
+   1,240-member category in batches.
+6b. **Local image files (F28, issue #2)** — the highest-value input mode, and independent of everything
+   above: triage *before* upload is where the work actually happens, and it drops the pageid
+   requirement entirely. The shape is fixed by measurement and by policy: resize in the browser to
+   **640 px** (never upscale — the encoder's target, so tokens are identical and the bytes are ~40–140×
+   smaller), send **one image per request**, key the cached answer by **content hash**, and never write
+   image bytes to disk (ToU §4.4/§7.2; PRD §9). Sharing that hash with Commons mode makes a file scored
+   locally free again once it is uploaded.
 7. **Run history + run-to-run diff** (small SQLite or JSON store): "these 12 photos got worse after
    the file was overwritten / after I changed the schema".
 8. **Server-sent events instead of 1 s polling** — nicer clocks, less chatter; the incremental
@@ -742,7 +784,10 @@ and a public tool should not be the thing that load-tests it.
 
 ## 8. Loose ends
 
-- Category input is unimplemented (warned about in the UI, not silently ignored).
+- Input sources are unimplemented: a Commons category (F12/F18, issue #1), local image files (F28,
+  issue #2), and PagePile + wiki page/section/gallery (F17/F29, issue #5). All of them are warned about
+  in the UI rather than silently ignored. Their designs, the counts they turn on and what is still
+  unverified are in PRD §9/§12/§13 and in §4 of this file.
 - `tests/package.json` and its `node_modules` exist only for the DOM test (jsdom), and
   `tools/package.sh` excludes the `node_modules`. Run **`cd tests && npm install`** if you need the
   test. The package.json is in `tests/` **deliberately**: the Toolforge Build Service engages the
