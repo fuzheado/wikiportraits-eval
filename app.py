@@ -8,14 +8,20 @@ llm-clef-flash decision model.
 Toolforge (Build Service): Procfile `web: python3 app.py`, no pip install needed.
 Toolforge (traditional uWSGI backend): use wsgi.py, which exposes `app`.
 """
+import json
 import os
 import re
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import core
 
 PORT = int(os.environ.get("PORT", "8765"))
+# How long a request body may take to arrive. `rfile.read(n)` waits for all n bytes, so without this
+# a client that declares a large Content-Length and then stalls holds the worker, and the memory it
+# has already buffered, indefinitely (measured 2026-10-16 — see docs/HANDOFF.md §4).
+READ_TIMEOUT = float(os.environ.get("BODY_READ_TIMEOUT", "30"))
 
 
 def redact_query(msg: str) -> str:
@@ -34,7 +40,10 @@ def redact_query(msg: str) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "WikiPortraitsEval/0.4"
+    # Was the literal "WikiPortraitsEval/0.4", which drifted three releases behind the version the
+    # page reports — the same drift the User-Agent had before it was pointed at APP_VERSION. One
+    # source of truth for the version, or it lies to whoever reads the header.
+    server_version = "WikiPortraitsEval/" + core.APP_VERSION
 
     def log_message(self, fmt, *args):
         # `BaseHTTPRequestHandler.log_request` formats the request line, status and size — it does
@@ -43,11 +52,7 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("QUIET") != "1":
             print(f"[{self.log_date_time_string()}] {redact_query(fmt % args)}", flush=True)
 
-    def _respond(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(n) if n else b""
-        status, ctype, payload, extra = core.route(self.command, urlparse(self.path).path, body,
-                                                    urlparse(self.path).query)
+    def _send(self, status, ctype, payload, extra=None):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(payload)))
@@ -57,6 +62,33 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(payload)
+
+    def _respond(self):
+        # Content-Length is a claim, not a fact, and it is checked *before* the body is read: an
+        # over-cap request is refused outright instead of being buffered. Measured 2026-10-16, the
+        # app happily read a 32 MiB body into a 512 MiB container with no cap and no read timeout
+        # (docs/HANDOFF.md §4).
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.close_connection = True
+            return self._send(400, "application/json",
+                              json.dumps({"error": "Content-Length is not a number"}).encode())
+        over = core.body_too_large(n)
+        if over:
+            self.close_connection = True          # never linger on a body we are refusing
+            return self._send(*over)
+        self.connection.settimeout(READ_TIMEOUT)
+        try:
+            body = self.rfile.read(n) if n else b""
+        except (socket.timeout, TimeoutError):
+            self.close_connection = True
+            return self._send(408, "application/json", json.dumps(
+                {"error": "timed out reading the request body — fewer bytes arrived than "
+                          "Content-Length declared"}).encode(), {"Connection": "close"})
+        status, ctype, payload, extra = core.route(self.command, urlparse(self.path).path, body,
+                                                    urlparse(self.path).query)
+        self._send(status, ctype, payload, extra)
 
     do_GET = do_POST = do_HEAD = _respond
 
