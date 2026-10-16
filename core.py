@@ -45,6 +45,27 @@ JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
 MAX_JOBS_KEPT = int(os.environ.get("MAX_JOBS_KEPT", "100"))   # bounded job history (memory guard)
 PARSE_MAX = int(os.environ.get("PARSE_MAX", "1000"))         # cap /api/parse resolve batches
+# Request-body ceiling, enforced by both backends before a byte is read. 1 MiB is ~10x the largest
+# body this app legitimately receives (PARSE_MAX 1000 titles is ~100 KB, and the /api/eval cap is 25
+# files). It exists because nothing else caps it: measured 2026-10-16, Toolforge's ingress accepted a
+# 32 MiB POST and the app buffered the whole thing inside a 512 MiB container. Published in
+# /api/config, so the boundary is stated rather than discovered.
+MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", str(1024 * 1024)))
+
+
+def body_too_large(n: int):
+    """(status, ctype, payload, extra) refusing an over-cap body, or None to carry on.
+
+    Shared by the http.server and WSGI backends so both refuse the same way and name the same limit —
+    a cap that exists in one code path and not the other is the trap this closes (HANDOFF §4).
+    """
+    if n > MAX_BODY_BYTES:
+        return (413, "application/json",
+                json.dumps({"error": f"request body is {n} bytes; this server accepts at most "
+                                     f"{MAX_BODY_BYTES} (MAX_BODY_BYTES) — send a shorter list, "
+                                     f"or raise the limit on the server"},
+                           ensure_ascii=False).encode(), {})
+    return None
 
 
 # ------------------------------------------------------------------ job store
@@ -1050,6 +1071,10 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                            # it reads the config): a hardcoded copy drifts from the server's, and the
                            # symptom of drift is exactly that lie.
                            "max_input_items": MAX_INPUT_ITEMS,
+                           # The request-body ceiling both backends enforce. Published for the same
+                           # reason as max_input_items: a client that can read the limit can stay
+                           # under it instead of meeting a 413.
+                           "max_body_bytes": MAX_BODY_BYTES,
                            "thumbnail": {"requested_w": THUMB_WIDTH,
                                          "is_ladder_step": THUMB_WIDTH in wiclient.THUMB_LADDER,
                                          "ladder": list(wiclient.THUMB_LADDER),
@@ -1071,7 +1096,28 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
             return js({"error": "not found"}, 404)
 
         if method == "POST":
-            data = json.loads(body.decode() or "{}") if body else {}
+            try:
+                data = json.loads(body.decode() or "{}") if body else {}
+            except ValueError as exc:
+                # A body that is not JSON is the caller's to fix, so answer 400 — it used to fall
+                # through to the blanket handler at the bottom of this function and come back as 500
+                # "server error", which reads as a fault here and hides the real reason.
+                # (json.JSONDecodeError subclasses ValueError, as does a bad UTF-8 decode.)
+                return js({"error": "request body is not valid JSON (" + type(exc).__name__ + "); "
+                                    'expected {"text": "..."} or {"files": [...]}'}, 400)
+            if not isinstance(data, dict):
+                # Valid JSON is not necessarily the shape these routes take: a bare list or string
+                # would fail later at data.get() and surface as the same misleading 500.
+                return js({"error": "request body must be a JSON object, got "
+                                    + type(data).__name__}, 400)
+            if data.get("text") is not None and not isinstance(data["text"], str):
+                # `text` goes straight into the parser, which is string-only — a list or a number
+                # raised inside re.split and came back as 500 "server error" (measured 2026-10-16).
+                # Name the fix, because a JSON array here is a reasonable thing to try. A null is
+                # left alone: an empty box is a fair thing for a client to send, and it parses to
+                # nothing anyway.
+                return js({"error": "text must be a string (a newline-separated list of files); "
+                                    'for a JSON array send {"files": [...]} to /api/eval'}, 400)
             if path == "/api/eval":
                 files = data.get("files")
                 if isinstance(files, str):
