@@ -311,40 +311,69 @@ Downloads for later photos run in a background thread while the model answers fo
   verdict meaningful).
 - Show rank + percentile within the run beside each probability (answers the clustering complaint
   without a schema change; see §9).
+- **Decide cache persistence** — the deployment runs `--mount=none`, so `cache/` is wiped on every
+  restart and "score a big category in four batches" silently becomes "pay for all of it again". F18's
+  plan rests on this (HANDOFF §7.4), and so does anything run-to-run (§13 Next's history item).
 
 **Next**
 - Report candidate spread for each run (range and ordering among plausible candidates).
-- **Input sources, in the order worth doing them** (F17–F21). Each returns `File:`
-  titles, which the app already resolves — the work is the *selection* UX and the caps, not the API:
-  1. **PagePile ID** (F17) — one fixed-host call with a numeric id. Smallest and most shareable.
-  2. **Commons category, with depth** (F18) — depth needs `deepcategory:` (CirrusSearch, ≤5 levels) or
-     PetScan. A cap is not enough: *which* 200 of 1,240 is a product decision (name order? newest?
-     random?) and must be stated at the point of confirmation.
-  3. **Commons search / SDC** (F19) — `srsearch=…&srnamespace=6`, e.g. `haswbstatement:P180=Q42`
+- **Input sources, in the order worth doing them** (F17–F21, F28–F29, issues #1 / #2 / #5). Each
+  returns `File:` titles, which the app already resolves — the work is the *selection* UX, the caps and
+  the confirmation step, not the API. All of them use the same pattern as `?list=`: prefill the box and
+  let a human press *Validate files*, so an id or a link can never spend by itself.
+  1. **PagePile ID** (F17, issue #5) — smallest and most shareable: one fixed-host call with a numeric
+     id, re-verified 2026-10-16 (0.16–0.19 s), and `pages_total` returns the count **before** anything is
+     spent, which is exactly the confirmation step this needs. Two measured traps: an unknown id answers
+     **HTTP 500** (not 404), so it must never be reported as an outage; and piles mix namespaces
+     (`Kategorie:`, `Diskussion:` and bare `Q…` all turned up in public piles), so filter to `File:` and
+     state how many entries were dropped.
+  2. **Wiki page / one section / one `<gallery>` block** (F29, issue #5) — `prop=images` returned **215
+     files** on `Commons:WikiPortraits`, which itself holds **12 `<gallery>` blocks** (one with 29
+     entries); `action=parse&section=N` scopes a section. Caveat to verify before building: `prop=images`
+     carries images pulled in by transcluded templates, and a section that only transcludes a gallery can
+     come back empty — read the wikitext for `<gallery>` and say so when a page has none, rather than
+     silently returning nothing. The galleries themselves are free weak labels (§9).
+  3. **Commons category, with depth** (F12/F18, issue #1) — **needs the cache decision above.** Depth is
+     explicit and counted: 221 files directly, 137,817 with the tree. `cmsort=timestamp&cmdir=desc`
+     returns real upload order (verified against `imageinfo`), so "the newest 200" is one call — but use
+     `cmnamespace=6`, because `cmtype=file` combined with the timestamp sort leaked `Category:` members
+     (8 files + 2 categories out of 10, reproduced twice). For a big category the honest options are
+     newest-N, filter-then-prune, a stratified sample, or scoring it in parts; a cap alone does not
+     decide *which* 200 of 1,240 (§12.8).
+  4. **Local image files** (F28, issue #2) — independent of the resource sources and arguably the
+     highest-value mode: triage *before* upload is where the work happens, and it removes the pageid
+     requirement entirely. Browser-side resize to 640 px, one image per request, answers keyed by content
+     hash, no image bytes persisted (§9).
+  5. **Commons search / SDC** (F19) — `srsearch=…&srnamespace=6`, e.g. `haswbstatement:P180=Q42`
      ("files depicting this person"), `hastemplate:`, `deepcategory:`. **`srnamespace` is
      mandatory**: without it the search runs in namespace 0 and "0 hits" reads as an empty corpus
      (0 vs 363,459 in the audit recorded in the search skill).
-  4. **Uploaded list file** (F21) — purely client-side, so it has no fetch or security surface, and it
+  6. **Uploaded list file** (F21) — purely client-side, so it has no fetch or security surface, and it
      is the answer to the ~4,000-character link ceiling for a spreadsheet paste.
-  5. **PetScan PSID** (F20) — widest coverage (it can express 1–4 as one id), at the price of depending
+  7. **PetScan PSID** (F20) — widest coverage (it can express 1–6 as one id), at the price of depending
      on another tool staying up and its result set staying reproducible.
   Two more, deliberately out of rank order because they need a decision, not plumbing: **"uploads by a
   user"** (`list=allimages&aiuser=…`, which **requires `aisort=timestamp`** — without it the API answers
   `invalidparammix`, verified 2026-10-14) and **non-Commons hosts** (Flickr, Internet Archive, a GLAM
   DAM), which would mean fetching foreign URLs, displaying foreign licences and — per §9 — a new trust
   decision rather than a new source. Prefer the Flickr→Commons path the skills already document.
+- **Display for a large source** (rides on F18/F29): past roughly 60 photos the chart stops being the
+  primary view. Default to the ranked table with the filters, keep the chart for the candidates and the
+  top of the list (F24's axis is already that instinct), and have the report state how many photos it
+  drew and by which rule.
 - Validation run: 12+ portraits, today's wording vs the two-option `choice` vs the composite.
-- `Category:` / PetScan / SPARQL / **PagePile ID** input with an explicit cap and confirmation step.
-  PagePile (F17) is the least work of the four and the most shareable: one fixed-host call with a
-  numeric id returns a title list, and the shape is the one already proven for `?list=` — prefill
-  the box, then let a human press *Validate files* rather than starting anything by itself.
-- Run history + run-to-run comparison (needs a small store).
+- Run history + run-to-run comparison (needs a small store, and the cache decision above).
 - Thumbnail proxy + local cache option for fully server-origin deployments.
 - Server-sent events instead of 1 s polling (nicer clocks, less chatter).
 - i18n via message files (translatewiki conventions) — the schema wording itself is English-only.
 
 **Later**
 - Calibration study against human labels → a defensible threshold and a published curve.
+- **Gallery-order agreement study** (rides on F29, no extra parsing) — rank-correlate our ranking against
+  the curated order of the `<gallery>` blocks on pages WikiPortraits already maintains, and report the
+  worst disagreements by name ("the page puts this 2nd, we rank it 7th"). Zero labelling cost, and a
+  partial answer to §12.6 and §12.1 — with the caveat stated when it is reported: a curated gallery is a
+  human judgement but not an independent one, and it may be roughly chronological.
 - Model-agreement study (clef vs clef-flash vs a Qwen LLM on LiftWing).
 - Portfolio/rank questions in the schema (best-of-set) rather than per-photo binaries.
 - Optional per-photo "why" panel exposing the full probability distribution side by side.
@@ -366,3 +395,29 @@ Downloads for later photos run in a background thread while the model answers fo
   fact questions sd 0.350–0.372 vs `infobox_ready` 0.229 and `quality` 0.145.
 - Sample score distribution (24 WikiPortraits photos): mean P(infobox) 0.361, max 0.707, 5 of 24
   ≥ 0.5; quality mean 2.51/4; median call 0.62 s (on 2026-10-12).
+
+### Input sources and request size (measured 2026-10-16)
+
+- **Category sizes:** `Category:WikiPortraits` = **221 files** directly, 18 subcategories;
+  `deepcategory:WikiPortraits` = **137,817**. So depth changes the set by ~600×.
+- **Category ordering:** `cmsort=timestamp&cmdir=desc` matches real upload times (spot-checked against
+  `imageinfo`: member 23:29:21Z vs upload 23:29:20Z). `cmtype=file` **plus** the timestamp sort leaked
+  `Category:` members (8 files + 2 categories out of 10), reproduced twice; `cmnamespace=6` with an
+  `ns == 6` assertion is the safe form.
+- **PagePile:** `GET https://pagepile.toolforge.org/api.php?action=get_data&format=json&id=<id>` →
+  `{pages, wiki, id, pages_returned, pages_total, sort_order, language, project}`; a Commons pile answers
+  `wiki: "commonswiki"` with `File:`-prefixed, underscored titles; 0.16–0.19 s for small piles. An
+  unknown id answers **HTTP 500** (ids 1, 2, 100, 1000, 99999999 all did). Public piles mix namespaces
+  (`Kategorie:`, `Diskussion:`, bare `Q…` observed).
+- **Wiki page as a source:** `prop=images` on `Commons:WikiPortraits` = **215 files**; its wikitext holds
+  **12 `<gallery>` blocks** (largest: 29 entries); `action=parse&section=N&prop=images` scopes a section.
+- **Request body:** Toolforge's ingress accepted **1 KiB → 32 MiB** with no 413 (and no early rejection of
+  `Expect: 100-continue` at 12 MiB). The app's own memory cost of buffering: base RSS 24.7 MiB →
+  **+11.8 MiB for 16 MiB, +27.8 MiB for 32 MiB** (~0.9×, not returned). A body declaring 10 MiB and
+  sending 1 KiB held a worker for 8–12 s (both origins; nothing observed cutting it off). Full ladder in
+  `docs/HANDOFF.md` §4.
+- **Per-image bytes:** from Commons, a **165 KB median** thumbnail (960 px ladder step) → ~220 KB
+  base64'd, so 200 photos in one body ≈ 32 MiB raw / ~43 MiB base64. Locally resized to **640 px**
+  (JPEG q80, n=3 WikiPortraits portraits): **35 / 52 / 89 KB**, median 52 KB, mean 59 KB → 200 files ≈
+  **10–12 MiB**. The originals were 3.7–5.0 MB each, i.e. the resize is **~40–140×** smaller than sending
+  what the camera produced, at identical tokens (the encoder's target is 640 px).
