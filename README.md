@@ -69,6 +69,10 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    and *Copy share link* carries exactly it, and entries that failed to resolve are kept at the end
    rather than deleted. **A sample is a fair picture of a batch, not the best 200 of it** — nothing has
    been scored yet, so to find the strongest photos, score all of them in parts instead.
+   **Click any thumbnail — in the chart or on a card — to open that photo's detail**, which names its
+   **rank** (`rank 12 of 40`) and lets you walk the ranking without closing it: **◀ prev** / **next ▶**,
+   or the **←** / **→** keys. The step order is the ranking wherever you opened from, the ends stop
+   rather than wrap, and a photo that has not been scored says so instead of showing a rank.
 3. **Score them** — tick **run fresh** if you want the answers re-computed instead of reusing the
    ones already saved (that is the honest way to judge speed: one model call per photo). The app
    first sends a **tiny text-only pre-flight question** to the endpoint

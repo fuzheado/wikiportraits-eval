@@ -222,8 +222,11 @@
 <div id="detail-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
   <div class="modal">
     <div class="row"><h2 id="detail-title" style="margin:0">—</h2>
+      <span id="detail-rank" class="pill">—</span>
       <span class="grow"></span>
-      <button id="detail-close" title="Close">Close ✕</button></div>
+      <button id="detail-prev" class="mini" title="Previous in the ranking (←)">◀ prev</button>
+      <button id="detail-next" class="mini" title="Next in the ranking (→)">next ▶</button>
+      <button id="detail-close" title="Close (Esc)">Close ✕</button></div>
     <div id="detail-body" style="margin-top:10px"></div>
   </div>
 </div>
@@ -362,6 +365,20 @@ function rankOf(it) {
   if (it.composite != null) return it.composite;
   const ib = it.result?.answers?.infobox_ready?.noul;
   return ib == null ? -1 : ib;
+}
+
+// The ranking order, in ONE place: scored photos first, best composite first. The ranked list and the
+// detail popup's rank numbers both read this comparator, so the popup cannot disagree with the badge
+// you clicked to open it.
+function byRank(a, b) {
+  const ad = a.status === "done", bd = b.status === "done";
+  if (ad !== bd) return ad ? -1 : 1;
+  return ad ? rankOf(b) - rankOf(a) : 0;
+}
+
+// Every scored photo in ranking order — the sequence the detail popup steps through.
+function rankedDone(job) {
+  return ((job || lastJob || {}).items || []).filter(i => i.status === "done").sort(byRank);
 }
 
 // ---- statuses. `downloading` means bytes are in flight; `ready` means the image is already
@@ -996,13 +1013,7 @@ function renderJob(job) {
   // Done photos are ordered by the composite (rank shown), anything still running keeps its place
   // below them.
   const order = (job.items || []).slice();
-  if (rowOrder === "ranked") {
-    order.sort((a, b) => {
-      const ad = a.status === "done", bd = b.status === "done";
-      if (ad !== bd) return ad ? -1 : 1;
-      return ad ? rankOf(b) - rankOf(a) : 0;
-    });
-  }
+  if (rowOrder === "ranked") order.sort(byRank);   // the same comparator rankedDone() uses
   // "as pasted" keeps new_job()'s order — the order the lines arrived in. Unfinished photos then
   // sit in their own place instead of being pushed below the finished ones, which reads better
   // while a run is going.
@@ -1089,6 +1100,12 @@ $("about-open").onclick = showAbout;
 $("about-close").onclick = hideAbout;
 $("about-overlay").addEventListener("click", (e) => { if (e.target === $("about-overlay")) hideAbout(); });
 document.addEventListener("keydown", (e) => {
+  // Arrows step the ranking, but ONLY while the detail popup is open — otherwise they would hijack
+  // scrolling and cursor movement on the results page.
+  if (!$("detail-overlay").classList.contains("hidden")) {
+    if (e.key === "ArrowLeft") { e.preventDefault(); stepDetail(-1); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); stepDetail(1); return; }
+  }
   if (e.key !== "Escape") return;
   // close whatever is on top: the detail popup can be open over the results, and the confirm
   // dialog over that, so this is a stack rather than one overlay
@@ -1158,12 +1175,53 @@ function detailHtml(it) {
 
 function openDetail(it) {
   if (!it) return;
-  $("detail-title").textContent = (it.title || it.raw || "").replace(/^File:/, "");
-  $("detail-body").innerHTML = detailHtml(it);
+  detailTitle = it.title || it.raw || null;
+  if (!renderDetail()) return;
   $("detail-overlay").classList.remove("hidden");
+  $("detail-overlay").scrollTop = 0;     // the overlay is the scroller, so a newly-opened photo starts at the top
   $("detail-close").focus();
 }
 function hideDetail() { $("detail-overlay").classList.add("hidden"); }
+
+// The popup shows ONE photo, so the first question it has to answer is "is this the best of 40 or the
+// worst?" — it showed no rank at all before 0.20.6. With the rank known, the ranking is also walkable
+// without closing and re-opening: prev/next (and the arrow keys) step through it. The sequence is the
+// *ranked* order wherever you started from, not the row order on screen, which is what triage wants and
+// what the rank line makes unambiguous.
+//
+// Looked up by TITLE, never by object identity: a poll replaces every item object once a second (see
+// `lastJob = job`), so an identity-based lookup would lose the rank mid-run and the rank line would
+// flicker to "no rank" while the run was still going.
+let detailTitle = null;
+
+function renderDetail() {
+  const it = itemByTitle(detailTitle);
+  if (!it) { hideDetail(); return false; }        // a new run cleared the results under us
+  $("detail-title").textContent = (it.title || it.raw || "").replace(/^File:/, "");
+  const seq = rankedDone();
+  const idx = seq.indexOf(it);
+  $("detail-rank").textContent = idx < 0
+    ? (it.status === "done" ? "no rank — no composite"
+                            : (STATUS_LABEL[it.status] || it.status || "pending"))
+    : `rank ${idx + 1} of ${seq.length}`;
+  $("detail-body").innerHTML = detailHtml(it);
+  // Disabled at the ends rather than wrapping: wrapping would jump from the best photo straight to the
+  // worst, which reads as a glitch rather than as a wrap.
+  $("detail-prev").disabled = idx <= 0;
+  $("detail-next").disabled = idx < 0 || idx >= seq.length - 1;
+  return true;
+}
+
+function stepDetail(delta) {
+  const seq = rankedDone();
+  const idx = seq.indexOf(itemByTitle(detailTitle));
+  const next = idx < 0 ? null : seq[idx + delta];
+  if (!next) return;
+  detailTitle = next.title || next.raw || null;
+  if (renderDetail()) $("detail-overlay").scrollTop = 0;
+}
+$("detail-prev").onclick = () => stepDetail(-1);
+$("detail-next").onclick = () => stepDetail(1);
 
 function itemByTitle(title) {
   return ((lastJob || {}).items || []).find(x => (x.title || x.raw) === title) || null;

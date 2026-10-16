@@ -8,7 +8,7 @@ import urllib.error, urllib.parse, urllib.request
 # The app version lives here rather than in core.py because both need it: core reports it (About,
 # reports) and this module puts it in the default User-Agent. One source of truth — before this, the
 # UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
-APP_VERSION = "0.20.5"
+APP_VERSION = "0.20.6"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
     f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")

@@ -668,6 +668,71 @@ function finish() {
   ok(overlayEl.classList.contains('hidden'), 'Close hides it');
   doc.querySelector('#items img.thumb').click();
   ok(!overlayEl.classList.contains('hidden'), 'a card thumbnail opens it too');
+
+  // ---- 10b. the rank, and stepping through the ranking -----------------------------------------
+  // Asked for: the popup shows no rank, so a photo viewed in isolation cannot answer "is this the best
+  // of 40 or the worst?" — and since the rank is known, it should be walkable without closing it.
+  // The fixture on screen is `mixed`: Posed 0.90 > Waist 0.70 > Candid 0.40 > Crowd 0.20.
+  const rankEl = doc.getElementById('detail-rank');
+  const prevBtn = doc.getElementById('detail-prev');
+  const nextBtn = doc.getElementById('detail-next');
+  const openTitle = () => doc.getElementById('detail-title').textContent;
+  // the card thumbnail we just clicked is the first row in ranked order
+  ok(/^rank 1 of 4$/.test(rankEl.textContent),
+     `the popup names the rank and the field size (got ${JSON.stringify(rankEl.textContent)})`);
+  ok(openTitle() === 'Posed.jpg', `and it is the top-ranked photo (got ${openTitle()})`);
+  ok(prevBtn.disabled, 'with no previous at rank 1, so the button is disabled rather than wrapping');
+  ok(!nextBtn.disabled, 'and next is available');
+
+  nextBtn.click();
+  ok(openTitle() === 'Waist.jpg', `next steps to the next in the ranking (got ${openTitle()})`);
+  ok(/^rank 2 of 4$/.test(rankEl.textContent), `and the rank line follows it (got ${rankEl.textContent})`);
+  ok(!prevBtn.disabled, 'now there IS a previous');
+  nextBtn.click();
+  nextBtn.click();
+  ok(openTitle() === 'Crowd.jpg', 'stepping twice more reaches the last photo');
+  ok(/^rank 4 of 4$/.test(rankEl.textContent), 'at rank 4 of 4');
+  ok(nextBtn.disabled, 'and next is disabled at the bottom — it does not wrap round to the best photo');
+  prevBtn.click();
+  ok(openTitle() === 'Candid.jpg', 'prev steps back up the ranking');
+
+  // the arrow keys do the same, and ONLY while the popup is open
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+  ok(openTitle() === 'Waist.jpg', 'ArrowLeft steps backwards');
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowRight' }));
+  ok(openTitle() === 'Candid.jpg', 'ArrowRight steps forwards again');
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+  ok(openTitle() === 'Posed.jpg', 'arrows stop at the top of the ranking');
+
+  // the popup must agree with the badge on the card the reader clicked to open it
+  const badgeRank = doc.querySelector('#items .item .rank').textContent.trim();
+  ok(badgeRank === '#1' && /rank 1 of 4/.test(rankEl.textContent),
+     `the popup rank matches the card badge you clicked (badge ${badgeRank})`);
+
+  // a poll replaces every item object; the popup must survive that instead of losing its rank
+  const sameMixed = mixed.map((it) => ({ ...it, result: { ...it.result } }));
+  render(job(sameMixed, { status: 'done', stats: { n_scored: 4, n_input: 4, poses: {}, n_429: 0 } }));
+  ok(!overlayEl.classList.contains('hidden') && openTitle() === 'Posed.jpg',
+     'the popup stays open across a poll');
+  ok(/^rank 1 of 4$/.test(doc.getElementById('detail-rank').textContent),
+     'and keeps its rank even though every item object was replaced');
+
+  // an unscored photo has no rank: say so, and offer no stepping. Opened from the CARD, not the chart:
+  // the chart only plots photos it can place on the axis, so an unscored one has no thumbnail there.
+  render(job([item('downloading', { title: 'File:Pending.jpg', pageid: 99 })]));
+  doc.querySelector('#items img.thumb').click();
+  ok(/downloading|no rank/.test(doc.getElementById('detail-rank').textContent),
+     `an unscored photo says it has no rank rather than showing a wrong one `
+     + `(got ${JSON.stringify(doc.getElementById('detail-rank').textContent)})`);
+  ok(doc.getElementById('detail-prev').disabled && doc.getElementById('detail-next').disabled,
+     'and offers no stepping (there is nothing ranked to step through)');
+  if (!overlayEl.classList.contains('hidden')) doc.getElementById('detail-close').click();
+
+  render(job(mixed, { status: 'done' }));
+  doc.getElementById('cm-combined').click();
+  doc.querySelector('#items img.thumb').click();
   doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape' }));
   ok(overlayEl.classList.contains('hidden'), 'Escape closes it');
 
@@ -677,6 +742,8 @@ function finish() {
   const pendingThumb = doc.querySelector('#chart .cthumb');
   if (pendingThumb) { pendingThumb.click(); doc.getElementById('detail-close').click(); }
   ok(true, 'a thumbnail with no answer yet does not break the popup');
+  // restore the fixture the following sections expect
+  render(job(mixed, { status: 'done' }));
 
   // ---- 11. row order: ranked (the default) or as pasted --------------------------------------
   // The fixture is deliberately one whose paste order differs from its ranking (the last line is
