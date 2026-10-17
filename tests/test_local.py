@@ -385,6 +385,40 @@ st, ctype, out, _ = core.route("POST", "/api/eval", json.dumps({"local": [uid]})
 ok(st == 200 and json.loads(out)["results"][0]["local"] is True,
    "POST /api/eval scores an upload on its own, with no files[] (the curl path)")
 
+print("\n9. the upload cap and the request-body ceiling cannot disagree")
+# The body ceiling is enforced by BOTH backends before `core.route` is called, so an upload cap above
+# it could never be reached: /api/config would advertise a limit the server refuses. Reconciled when
+# the ceiling arrived from a parallel branch (2026-10-16); this is the guard that keeps them in step.
+cfg = json.loads(core.route("GET", "/api/config", b"", "")[2])
+ok(localstore.MAX_UPLOAD_BYTES <= core.MAX_BODY_BYTES,
+   f"the store's per-image cap ({localstore.MAX_UPLOAD_BYTES}) is within the body ceiling "
+   f"({core.MAX_BODY_BYTES})")
+ok(core.MAX_UPLOAD_BYTES == min(localstore.MAX_UPLOAD_BYTES, core.MAX_BODY_BYTES),
+   "core's effective cap is the smaller of the two")
+ok(cfg["local"]["max_upload_bytes"] == core.MAX_UPLOAD_BYTES,
+   f"/api/config publishes the EFFECTIVE cap ({cfg['local']['max_upload_bytes']}), not the store's "
+   f"own larger one")
+ok(cfg.get("max_body_bytes") == core.MAX_BODY_BYTES, "and the ceiling is published too")
+ok(core.body_too_large(core.MAX_BODY_BYTES) is None,
+   "a body of exactly the ceiling passes the backend check (the boundary is > not >=)")
+_over = core.body_too_large(core.MAX_BODY_BYTES + 1)
+ok(_over and _over[0] == 413,
+   "…and a byte more is refused by the backend, before any route runs")
+
+# The route's own cap, at its boundary. Monkeypatched rather than building a >1 MiB fixture: the route
+# reads the module global at call time, so this is the real check — and the CONTROL below is what stops
+# it passing for the wrong reason (a 413 from anywhere would satisfy the first assertion alone).
+keep_up = core.MAX_UPLOAD_BYTES
+core.MAX_UPLOAD_BYTES = len(img) - 1
+st, body, _ = upload(img, name="one-byte-over.jpg")
+ok(st == 413 and "max_upload_bytes" in body.get("error", ""),
+   f"an image over the cap is refused with the image-specific sentence, naming the published cap "
+   f"({st}: {body.get('error', '')[:60]}…)")
+core.MAX_UPLOAD_BYTES = len(img)
+st, _b, _ = upload(img, name="exactly-at-the-cap.jpg")
+ok(st == 200, "CONTROL: the same image at the cap is accepted, so the 413 above was the cap and not luck")
+core.MAX_UPLOAD_BYTES = keep_up
+
 localstore.clear()
 print("\nFAILURES:", len(FAIL))
 for f in FAIL:

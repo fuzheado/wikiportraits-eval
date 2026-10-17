@@ -1455,6 +1455,13 @@ async function uploadLocal(file) {
   const blob = await new Promise((resolve, reject) => canvas.toBlob(
     b => b ? resolve(b) : reject(new Error("the browser could not re-encode the image")),
     "image/jpeg", 0.87));
+  // Refuse it here when it is over the published cap. The transport ceiling would otherwise answer
+  // first, with a message written for a long list — a confusing thing to read about a photograph.
+  const capBytes = (configCache.local || {}).max_upload_bytes;
+  if (capBytes && blob.size > capBytes) {
+    throw new Error(`resized to ${Math.round(blob.size / 1024)} KB, which is over the `
+      + `${Math.round(capBytes / 1024)} KB upload limit this server publishes (/api/config)`);
+  }
   const q = new URLSearchParams({ name: file.name || "upload.jpg", orig: `${sw}x${sh}` });
   const r = await fetch(`/api/upload?${q.toString()}`, {
     method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });

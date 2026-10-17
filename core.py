@@ -1111,7 +1111,7 @@ def about_payload() -> dict:
                   "<code>/api/eval</code> scores them alongside Commons titles, and "
                   "<code>GET /api/upload/&lt;id&gt;</code> serves the bytes back. The id is the "
                   "sha256 of the image, so the same file is never stored twice, and the store holds "
-                  "everything in memory: ≤ " + str(localstore.MAX_UPLOAD_BYTES // 1024) + "&nbsp;KB "
+                  "everything in memory: ≤ " + str(MAX_UPLOAD_BYTES // 1024) + "&nbsp;KB "
                   "per image, ≤ " + str(localstore.MAX_LOCAL_BYTES // (1024 * 1024)) + "&nbsp;MB in "
                   "total, dropped after " + str(localstore.LOCAL_TTL_S // 3600) + "&nbsp;h idle and "
                   "on every restart. <code>GET /api/config</code> publishes those limits under "
@@ -1320,6 +1320,12 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                            # actually needs to know — for how long it will keep it. Held in memory
                            # only; see localstore.py.
                            "local": {**localstore.stats(),
+                                     # the EFFECTIVE cap: localstore.stats() reports the store's own
+                                     # limit, but the smaller of that and the request-body ceiling is
+                                     # what the server will actually accept. Publishing the larger
+                                     # number would tell the page to try something the transport
+                                     # refuses before the route is even reached.
+                                     "max_upload_bytes": MAX_UPLOAD_BYTES,
                                      "accepts": ["image/jpeg", "image/png", "image/gif",
                                                   "image/webp"],
                                      "note": "uploaded images live in memory only and are never "

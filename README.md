@@ -167,7 +167,8 @@ Two things worth knowing:
 - **Your image is not stored.** It is held in the server's memory only — never written to disk, never
   in a cache on disk, gone the moment the service restarts — and no answer for it is cached either.
   Nothing lists what has been uploaded, and uploads are dropped after a few hours idle or when the
-  in-memory store fills up (≈64 MB). Only this server and the model endpoint ever see the image.
+  in-memory store fills up (≈64 MB, and uploads are capped by `local.max_upload_bytes` — smaller than
+  the request-body ceiling). Only this server and the model endpoint ever see the image.
 - **Identity is the content, not the name.** The upload is keyed by the sha256 of its bytes, so adding
   the same file twice is *one* image, while two different photos both called `IMG_0001.jpg` stay two.
   The filename is only a label — and **an uploaded image cannot travel in a share link or an API
@@ -234,7 +235,9 @@ POST /api/run    '{"text": …}'                               # async; poll GET
                  # add "cached_only": true to replay from saved answers and never call the model
                  # add "local": ["<upload id>", …] to score uploaded images alongside the list
 POST /api/upload?name=Foo.jpg                                 # the request BODY is the image → {id, w, h, …}
-                 # JPEG/PNG/GIF/WebP, ≤ 8 MB, held in memory only
+                 # JPEG/PNG/GIF/WebP, held in memory only. The cap is published as
+                 # `local.max_upload_bytes` in /api/config — it is the smaller of MAX_UPLOAD_BYTES and
+                 # the MAX_BODY_BYTES request ceiling, and the page stays under it by resizing first
 GET  /api/upload/<id>                                         # the image back out (private, no-store)
 GET  /api/default-list                                        # the sample list (default_list.txt)
 GET  /api/config                                              # model, pacing, caps, schema hash, cache stats
@@ -353,6 +356,12 @@ check *before* reading a byte, and publish in `/api/config`; 1 MiB is ~10× the 
 legitimately receives, and without it a 32 MiB POST is simply buffered — `docs/HANDOFF.md` §4),
 `BODY_READ_TIMEOUT` (30 s — how long a request body may take to arrive; a client that declares
 10 MiB and sends 1 KiB gets a 408 instead of holding a worker),
+`MAX_UPLOAD_BYTES` (1048576 — the per-image cap for `POST /api/upload`; the *effective* limit is
+`min` of this and `MAX_BODY_BYTES`, because the backends refuse an over-ceiling body before the route is
+reached, and that effective number is what `/api/config` publishes as `local.max_upload_bytes`),
+`MAX_LOCAL_BYTES` (67108864 — how much uploaded-image memory the in-memory store may use before it
+evicts the least recently used; `MAX_LOCAL_ITEMS` 400 bounds the count and `LOCAL_TTL_S` 21600 drops
+anything idle for six hours),
 `EVAL_MAX` (25, the per-call cap for `POST /api/eval`), `MAX_THUMB_BYTES` (20 MB per fetched
 thumbnail), `MAX_SEND_PIXELS` (40 MP per sent image), `MAX_JOBS_KEPT` (100 finished jobs kept),
 `PROBE_TTL` (600 s, how long a pre-flight verdict is reused), `CACHE_DIR` (`./cache`),

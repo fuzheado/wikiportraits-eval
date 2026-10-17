@@ -156,4 +156,15 @@ if _missing:
 else:
     print(f"element ids: all {len(_ids)} ids the script looks up exist in the HTML")
 
+# ---- the upload size is checked against the number the server publishes ---------------------------
+# The request-body ceiling (MAX_BODY_BYTES, 1 MiB) is enforced by both backends *before* routing, and an
+# image over it would meet a message written for a long list. So the page checks the size it produced
+# against `local.max_upload_bytes` — the effective cap, which is the smaller of the store's limit and
+# the ceiling — and says something sensible instead. **Assert the read, not a mention.**
+if not re.search(r"\(configCache\.local \|\| \{\}\)\.max_upload_bytes", js):
+    bad.append("index.html never reads the published upload cap")
+    print("  MISSING: the page does not read (configCache.local || {}).max_upload_bytes")
+else:
+    print("upload size: the page checks against the cap /api/config publishes")
+
 sys.exit(1 if (r.returncode or bad) else 0)
