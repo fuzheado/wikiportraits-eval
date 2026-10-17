@@ -449,8 +449,12 @@ python3 tests/test_thumb_width.py  # served width, ladder steps, cache keying (o
 python3 tests/test_default_list.py # the starter list + the "run fresh" flag (offline)
 python3 tests/test_default_list.py --live      # live: 1 batched Commons call, 0 model calls
 python3 tests/test_privacy.py      # the request log: no query, no IP, no UA (offline)
+python3 tests/test_local.py        # uploaded images: content identity, the caps, the per-run cap
+                                   # counting them, and — by contrast with a Commons run — that a
+                                   # person's own file never reaches the cache or cache/thumbs/ (offline)
 python3 tests/check_js.py          # the inline script parses + cross-language constants agree (offline)
 python3 tests/check_compat.py      # no syntax newer than the advertised Python 3.9 floor (offline)
+python3 tests/check_docs.py tests/check_memo_refs.py  # docs exist and cite real files (offline)
 python3 tools/probe_inflight_pacing.py         # offline, 0 API calls: proves when INFLIGHT>1 does anything
 .venv-pdf/bin/python tests/check_pdf.py        # the PDF's TEXT matches the live schema (venv: pypdf+pillow)
 .venv-pdf/bin/python tests/test_pdf_images.py  # renders the PDF back to PNG (venv: pypdfium2+pillow)

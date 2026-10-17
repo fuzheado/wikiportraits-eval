@@ -17,6 +17,18 @@ NON_FILES = {"wiki-pageid-sha1-schemahash-width.json"}
 SKILLS_DIR = os.environ.get("SKILLS_DIR", "")
 UPSTREAM = {"scripts/parse-file-refs.py": os.path.join(SKILLS_DIR, "commons-file-resolution/scripts/parse-file-refs.py")
             if SKILLS_DIR else ""}
+# …and the *local* skills tree (`~/.pi/agent/skills`), which is where the video pipeline's scripts live. Same
+# rule as SKILLS_DIR above: empty by default so this check never depends on whose laptop it runs on, and
+# verifiable when the caller points at the tree:
+#
+#     LOCAL_SKILLS_DIR=~/.pi/agent/skills python3 tests/check_docs.py
+#
+# Without it the two entries report as "not verified here (upstream)" rather than MISSING, because a doc that
+# cites another tree is not citing a broken path in this one.
+LOCAL_SKILLS_DIR = os.environ.get("LOCAL_SKILLS_DIR", "")
+for _tok, _rel in (("scripts/beat-drift.mjs", "narrated-tutorial-video/scripts/beat-drift.mjs"),
+                   ("scripts/frame-probe.py", "narrated-tutorial-video/scripts/frame-probe.py")):
+    UPSTREAM[_tok] = os.path.join(LOCAL_SKILLS_DIR, _rel) if LOCAL_SKILLS_DIR else ""
 missing = []
 unverified = []
 for d in DOCS:
@@ -41,7 +53,7 @@ def resolves(tok: str) -> Optional[str]:
 
 
 # every backticked filename that looks like a repo file must resolve
-pat = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|js|md|html|json|sh|txt))`")
+pat = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|mjs|js|md|html|json|sh|txt))`")
 seen = set()
 for d in DOCS:
     for tok in pat.findall(open(os.path.join(ROOT, d)).read()):
@@ -63,7 +75,7 @@ for tok in sorted(seen):
         continue
     print(f"  {'ok ' if resolves(tok) else 'MISSING'} {tok}")
 if unverified:
-    print(f"\nnot verified here ({len(unverified)}) — upstream, set SKILLS_DIR to a local clone "
-          f"to check: {sorted(unverified)}")
+    print(f"\nnot verified here ({len(unverified)}) — upstream, set SKILLS_DIR (or LOCAL_SKILLS_DIR for the "
+          f"local skills tree) to check: {sorted(unverified)}")
 print("\nMISSING:", missing if missing else "none")
 sys.exit(1 if missing else 0)

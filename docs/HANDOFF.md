@@ -615,6 +615,21 @@ and a public tool should not be the thing that load-tests it.
   Registry quota went **253.90 MiB → 181.01 MiB** (25 % → 18 % of the 1 GiB limit) on that deploy.
   End-to-end verified afterwards: `tools/live_pipeline_check.py` PASS (4 fresh photos, cache wiped
   by the `--mount=none` restart as always).
+- **Current state, 2026-10-16: production runs 0.21.0**, image
+  `sha256:cbc3d08ec29356e53e7e51992878e5f1806110a9fda67f2a9fc901e3609bae39`, started with
+  `--mount=none -m 512Mi` (so the upload store and the answer cache begin **empty**, by design). It shipped
+  two bodies of work at once: **0.21.0 local images** (§1, issue #2) plus the parallel `MAX_BODY_BYTES` /
+  JSON-validation / version-header work from PRs #4 and #6. Verified live rather than from the log: an upload
+  of the 2.2 MB original → **413** naming both caps, a 255 KB upload → **200** returning byte-identical
+  content with `Cache-Control: private, no-store`, `POST /api/eval {"local":[id]}` → scored **0.938** with
+  `commons_url: null`, `tools/live_pipeline_check.py` PASS, `tests/test_ui_contract.py` PASS. The feature was
+  reviewed **before** the switch as a narrated 2-minute take plus a 30-second showcase (both outside this
+  repo: `~/Movies/wikiportraits-local-images-v2.mp4`, `…-showcase-30s.mp4`) — that review is what caught the
+  three assembly defects later fixed upstream as WikiBento PR #117.
+- Deploys in between, for the record: **0.20.1** (2026-10-15, chart/gridline/obstruction work), **0.20.4**
+  (2026-10-16, the prune remedy for an over-cap list), **0.20.6** (2026-10-16, the detail popup's rank and
+  stepping). Same cycle every time: build → verify from **inside** a throwaway pod → `stop` →
+  `start --buildservice-image …@<digest> --mount=none -m 512Mi`.
 - **Verified deploy procedure (2026-10-14, v0.6.1 — this exact sequence works):**
 
   ```bash
@@ -820,6 +835,13 @@ actually serves, for any file, from cache on re-runs. Run it when a width-relate
   `tests/test_commons_file_resolution.py` suite and `scripts/parse-file-refs.py`. PR #93, merge commit
   `b5c5b863`. (Paths on this line are in the *skills* repo, not this one — say so, because a bare
   `tests/…` reads as local. An automated sweep for missing paths flagged exactly this.)
+- **The video pipeline** that reviewed this release is the `narrated-tutorial-video` skill (v1.1). Two things
+  in it came out of this feature and are worth knowing before making another: `scripts/beat-drift.mjs` (after
+  re-narrating, which scenes must be re-recorded — actions are baked into the footage at the *old* offsets;
+  switching the voice from macOS `say` to `edge-tts` Ava made the read 13 s longer and moved one click 1.6 s)
+  and `scripts/frame-probe.py` (blank frames and missing captions — the caption overlays rendered 0 opaque
+  pixels until the geometry stopped assuming 1080). The 30-second showcase was a different genre and tool
+  (hyperframes, HTML+GSAP → MP4); its contract and traps are in the same skill.
 - **Hermes skills:** `llm-endpoint-capability-audit` carries the session's research references —
   `references/clef-flash-2026-10.md` (model shape, caps, semantics), `references/liftwing-budget-and-image-prep-2026-10.md`
   (quota, thumbnail ladder, pacing), `references/liftwing-wikiportraits-suite-2026-10.md` (the schema
