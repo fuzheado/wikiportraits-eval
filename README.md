@@ -54,6 +54,10 @@ show why each one scored as it did. The same run also exports as Markdown, JSON,
    the placeholder disappears as soon as you click into the box.
    **Clicking the title** starts a new session: it asks first, then clears the list and the run on
    screen (your chart view, thumbnail size and row order are kept).
+   **Or drop image files in** — drag them onto the box, use **Add image files**, or paste a screenshot.
+   They are scored in the same run as the pasted list (a run can mix both), resized to 960 px wide in
+   your browser before upload, and held in the server's memory only. See *Images from your own
+   computer* below.
 2. **Validate files** — the tool resolves each line against Commons and shows you what it understood
    (`Foo.jpg` → `File:Foo.jpg` → 4000×6000, CC BY-SA 4.0). Fix or delete anything flagged. If a
    previous run's results are on screen, you are asked first — starting a new run clears them. Once
@@ -145,6 +149,35 @@ Non-photo media (SVG, PDF, video) also resolve, because Commons renders a raster
 
 Not supported yet: `Category:` listings — paste the file names instead.
 
+### Images from your own computer
+
+You do not have to use Commons files. **Drag image files onto the input box**, use **Add image files**,
+or paste a screenshot — they are scored in the same run as any pasted list, and appear in the same
+chart, cards, detail popup and reports. A run can mix both.
+
+Because the model only ever sees 640 px wide (the vision encoder normalises whatever you send), **your
+browser resizes each file to 960 px wide before uploading** — the same size the Commons thumbnails are
+fetched at, so a local photo and a Commons photo stay directly comparable. A 5000-pixel photo therefore
+costs a few hundred kilobytes to upload, and the resize re-encodes the image, **dropping the camera's
+EXIF metadata (including GPS) before it leaves your machine**. Rotation is applied first, so a portrait
+photo is not judged sideways.
+
+Two things worth knowing:
+
+- **Your image is not stored.** It is held in the server's memory only — never written to disk, never
+  in a cache on disk, gone the moment the service restarts — and no answer for it is cached either.
+  Nothing lists what has been uploaded, and uploads are dropped after a few hours idle or when the
+  in-memory store fills up (≈64 MB). Only this server and the model endpoint ever see the image.
+- **Identity is the content, not the name.** The upload is keyed by the sha256 of its bytes, so adding
+  the same file twice is *one* image, while two different photos both called `IMG_0001.jpg` stay two.
+  The filename is only a label — and **an uploaded image cannot travel in a share link or an API
+  command**, because it exists only in the session that uploaded it. Both buttons say so and export a
+  report instead.
+
+JPEG, PNG, GIF and WebP are accepted. A HEIC straight from an iPhone works only in a browser that can
+decode it (Safari can; Chrome and Firefox cannot) — where it cannot, the file is refused with that
+explanation rather than guessed at; converting to JPEG always works.
+
 ### Linking to a list you already have
 
 A list can also arrive in the URL, which is handy for a workshop, an event page, or a report that
@@ -199,9 +232,13 @@ POST /api/eval   '{"files": ["File:A.jpg", "File:B.jpg"]}'   # blocked; final ra
 POST /api/run    '{"text": …}'                               # async; poll GET /api/job/<id>
                  # add "no_cache": true to re-score every photo instead of reusing saved answers
                  # add "cached_only": true to replay from saved answers and never call the model
+                 # add "local": ["<upload id>", …] to score uploaded images alongside the list
+POST /api/upload?name=Foo.jpg                                 # the request BODY is the image → {id, w, h, …}
+                 # JPEG/PNG/GIF/WebP, ≤ 8 MB, held in memory only
+GET  /api/upload/<id>                                         # the image back out (private, no-store)
 GET  /api/default-list                                        # the sample list (default_list.txt)
 GET  /api/config                                              # model, pacing, caps, schema hash, cache stats
-                 # the run cap is published here (`max_input_items`) so the page can state it at Validate
+                 # the run cap (`max_input_items`) and the upload limits (`local`) are published here
 GET  /api/job/<id>/report.{md,json,csv,pdf}                   # reports for a finished job
                  # report.pdf?view=pose exports the by-pose chart rather than the combined one
 ```
@@ -280,6 +317,15 @@ pre-flight check.
 - Sent to the model: the image bytes and a fixed, published context sentence. **Not sent**: file
   names, page text, user names, or anything about who is in the photo.
 - Results are cached locally; job state lives in memory. No accounts, no analytics, no third parties.
+- **Images you upload are the exception, deliberately.** An image added from your computer is held in
+  the server's **memory only** — never written under `cache/`, never on disk, never on the NFS mount
+  the cache may later move to, and gone when the service restarts (every deploy restarts it). No
+  answer for it is cached either, so it cannot be re-scored by anyone later. It is served back to your
+  browser with `Cache-Control: private, no-store`, there is no endpoint that lists what has been
+  uploaded, and nothing about it travels in a share link. Its EXIF block — GPS, timestamps, camera
+  serial — is dropped by the browser's re-encode **before** the upload, so it never arrives here at
+  all. Uploads are evicted past ≈64 MB or after a few idle hours; the caps are published in
+  `/api/config` under `local`.
 - **What is logged:** the app writes one line per request — method, path, status — with **no query
   string, no IP address and no User-Agent**, and a per-run log (in memory, shown in *Run log*) with
   resolution counts, per-photo scores and any error body. Toolforge's own platform log does record

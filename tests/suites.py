@@ -48,6 +48,7 @@ RUN = [
     "test_thumb_width.py",
     "test_default_list.py",
     "test_privacy.py",
+    "test_local.py",           # uploads: in memory only, never on disk (asserted by contrast)
     "check_compat.py",
     "check_docs.py",
     "check_js.py",              # python, but shells out to `node --check`

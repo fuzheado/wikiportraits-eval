@@ -3,6 +3,7 @@ import csv, io, json, math, os, statistics
 from datetime import datetime, timezone
 
 import wiclient
+import localstore
 from pdfmin import PDF, MARGIN, CONTENT_W
 
 ORDER = ["face_visible", "face_unobstructed", "pose", "quality", "infobox_ready", "publish_ready",
@@ -44,8 +45,33 @@ def label(item):
 
 
 def thumb(item):
-    """A URL for the thumbnail, for the Markdown report (the PDF embeds bytes instead)."""
-    return item.get("thumburl")
+    """A URL for the thumbnail, for the Markdown report (the PDF embeds bytes instead).
+
+    An uploaded image has no URL to offer: it exists in this server's memory, under an id that is
+    meaningless anywhere else, and only until the process ends. Printing `/api/upload/<id>` into a
+    Markdown file would produce a link that looks like it should work and never will for the person
+    who receives the report, so a local image simply has no thumbnail line.
+    """
+    return None if item.get("local") else item.get("thumburl")
+
+
+def is_local(item) -> bool:
+    """True for an image uploaded from somebody's own computer rather than fetched from Commons."""
+    return bool(item.get("local"))
+
+
+def source_line(item) -> str:
+    """Where this image came from, in one line, for the reports.
+
+    An upload is labelled as such rather than dressed up as a Commons file: there is no page to
+    link to, no licence to read off a file page, and the responsibility for the image's rights is the
+    uploader's. Saying so is the honest version of an empty field.
+    """
+    if is_local(item):
+        return (f"- Source: uploaded from the operator's computer (sha256 {(item.get('local') or '')[:12]}…) "
+                f"· not a Commons file, and not published by this tool")
+    title = (item.get("title") or "").replace(" ", "_")
+    return f"- Commons: https://commons.wikimedia.org/wiki/{title}"
 
 
 def _credit(item):
@@ -57,6 +83,10 @@ def _credit(item):
     """
     lic = (item.get("license") or "").strip()
     who = (item.get("artist") or "").strip()
+    if is_local(item):
+        return ("- Licence: uploaded for evaluation; not a Commons file, so there is no Commons "
+                "licence to quote — the uploader is responsible for the rights to it"
+                + (f" ({lic}{' · ' if lic and who else ''}{who})" if (lic or who) else ""))
     if not lic and not who:
         return "- Licence: see the Commons file page (the API returned none)"
     parts = []
@@ -68,7 +98,9 @@ def _credit(item):
 
 
 def _thumb_bytes(item):
-    """Thumbnail bytes for embedding: the saved copy first (offline), else Commons."""
+    """Thumbnail bytes for embedding: memory for an upload, else the saved copy, else Commons."""
+    if item.get("local"):
+        return localstore.get(item["local"])
     p = item.get("thumb_file")
     if p and os.path.exists(p):
         try:
@@ -134,7 +166,12 @@ def ranked(items: list) -> list:
     return sorted(items, key=key)
 
 
-def _method_block(model_note=""):
+def _method_block(model_note="", items: list = None):
+    # Derived from the items, never assumed: a run can be all Commons, all uploads, or a mix, and
+    # the sentence about where the bytes came from must match what this report actually holds.
+    items = items or []
+    local_n = sum(1 for i in items if is_local(i))
+    n_input = len(items)
     return [
         "Model: llm-clef-flash (Cloudflare/clef-flash, 9.41 B params BF16, Apache-2.0) served by "
         "Wikimedia LiftWing at api.wikimedia.org/service/lw/inference/v1/models/llm-clef-flash:predict "
@@ -154,7 +191,12 @@ def _method_block(model_note=""):
         f"{wiclient.CANDIDATE_FLOOR}), not standard deviation — sd rises whenever answers pile up at "
         "either end, including at the ceiling, so it rewards the wrong thing.",
         "Inputs: Commons thumbnails at the standard step nearest above 640 px (the server downscales "
-        "to 640 px wide before the encoder, so larger sends add no information).",
+        "to 640 px wide before the encoder, so larger sends add no information)."
+        + (f" {local_n} of {n_input} image(s) in this run were instead uploaded from the operator's "
+           f"computer: their browser resized them to 960 px wide (the same size as the Commons "
+           f"thumbnails, so the numbers stay comparable) and this server holds the bytes in memory "
+           f"only — they are not Commons files and carry no Commons licence."
+           if local_n else ""),
         "Note: probabilities depend on the question set — the head scores every question jointly, so "
         f"only compare runs that used this identical {len(wiclient.QUESTIONS)}-question schema." + model_note,
     ]
@@ -164,7 +206,13 @@ def build_md(items: list, meta: dict) -> str:
     st = stats(items)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L = [f"# WikiPortraits Eval report — {ts}", ""]
-    L += ["> " + m for m in _method_block()] + [""]
+    L += ["> " + m for m in _method_block(items=items)] + [""]
+    if items and any(is_local(i) for i in items):
+        n_local = sum(1 for i in items if is_local(i))
+        L += [f"> **{n_local} of the {len(items)} images below were uploaded from the operator's "
+              f"computer**, not fetched from Commons. They are held in this server's memory only, "
+              f"are not Commons files, and carry no Commons licence — ask the uploader about the "
+              f"rights to them before publishing one.", ""]
     L += ["## Summary", ""]
     L += [f"- Images pasted: **{st['n_input']}** · resolved: **{st['n_resolved']}** · "
           f"scored: **{st['n_scored']}** · not found/failed: **{st['n_failed']}**"
@@ -226,7 +274,7 @@ def build_md(items: list, meta: dict) -> str:
         L += [f"### #{rank} · {it['title']}", ""]
         if thumb(it):
             L += [f"![{label(it)}]({thumb(it)})", ""]
-        L += [f"- Commons: https://commons.wikimedia.org/wiki/{it['title'].replace(' ', '_')}",
+        L += [source_line(it),
               _credit(it),
               f"- Original {it.get('orig_w')}×{it.get('orig_h')} px; "
               f"served {it.get('served_w') or '—'} px, sent {it.get('sent_px')}; "
@@ -260,7 +308,7 @@ def build_csv(items: list) -> str:
     w = csv.writer(buf)
     w.writerow(["rank", "title", "pageid", "status", "composite", "P_publish", "P_infobox_ready",
                 "quality_0_4", "pose", "P_eyes_to_camera", "P_face_visible", "input_tokens", "wall_s",
-                "orig_px", "served_w", "sent_px", "license", "sha1", "error"])
+                "orig_px", "served_w", "sent_px", "license", "sha1", "error", "local"])
     for i, it in enumerate(ranked(items), 1):
         a = _ans(it)
         w.writerow([i, it.get("title") or it.get("raw"), it.get("pageid"), it.get("status"),
@@ -271,7 +319,8 @@ def build_csv(items: list) -> str:
                     (it.get("result") or {}).get("usage", {}).get("input_tokens"),
                     (it.get("result") or {}).get("wall_s"),
                     f"{it.get('orig_w')}x{it.get('orig_h')}", it.get("served_w"), it.get("sent_px"),
-                    it.get("license"), it.get("sha1"), it.get("error")])
+                    it.get("license"), it.get("sha1"), it.get("error"),
+                    it.get("local") or ""])
     return buf.getvalue()
 
 
@@ -528,7 +577,7 @@ def build_pdf(items: list, meta: dict, chart_view: str = "combined", chart_axis:
     doc.rule()
     doc.spacer(4)
     doc.text("Method", size=11, bold=True)
-    for m in _method_block():
+    for m in _method_block(items=items):
         doc.small(m)
         doc.spacer(2)
     doc.spacer(6)
@@ -612,7 +661,9 @@ def build_pdf(items: list, meta: dict, chart_view: str = "combined", chart_axis:
                   f"{it['result']['usage'].get('input_tokens')} input tokens  ·  "
                   f"{it['result']['wall_s']} s  ·  HTTP {it['result'].get('http')}",
                   _credit(it).lstrip("- "),
-                  f"commons.wikimedia.org/wiki/{it['title'].replace(' ', '_')}"],
+                  (f"uploaded from your computer  ·  sha256 {(it.get('local') or '')[:12]}…"
+                   if it.get("local") else
+                   f"commons.wikimedia.org/wiki/{it['title'].replace(' ', '_')}")],
                  name=name)
         doc.hr_small()
     if doc.skipped:

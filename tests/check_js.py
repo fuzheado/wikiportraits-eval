@@ -109,4 +109,51 @@ elif not re.search(r"\b(flex|width)\s*:", m.group(1)):
 else:
     print(".chartbox keeps an explicit basis: OK")
 
+# ---- uploads: the downscale width comes from the server, and never from a typed-in copy -------------
+# A local image is resized in the browser (the server is stdlib-only: no Pillow, no decoder). The width
+# it is resized to must be the SAME width the Commons thumbnails are fetched at, or a local photo and a
+# Commons photo stop being comparable in one chart — and the difference would be invisible, because both
+# would look like a plausible photo. So the page reads `thumb_width_requested` from /api/config, exactly
+# as it reads `max_input_items` above, and the only literal in the file is a fallback for the moment
+# before /api/config answers. **Assert the read, not the mention:** this comment names it too.
+if not re.search(r"configCache\.thumb_width_requested", js):
+    bad.append("index.html never reads thumb_width_requested, so the upload width is a hardcoded copy")
+    print("  MISSING: the page does not read thumb_width_requested from /api/config")
+else:
+    _m = re.search(r"function uploadWidth\(\)\s*\{[^}]*\}", js)
+    if not _m or "configCache.thumb_width_requested" not in _m.group(0):
+        bad.append("uploadWidth() does not read the served thumbnail width")
+        print("  MISSING: uploadWidth() does not read configCache.thumb_width_requested")
+    else:
+        print("upload width: the page resizes to /api/config's thumb_width_requested")
+
+# ---- an uploaded image must never leak into a share link or a curl command --------------------------
+# An upload exists only inside the session that uploaded it. Its "title" is a filename off somebody's
+# laptop, so putting it in `?list=…` produces a link that (a) silently shows the recipient FEWER photos
+# than the sender saw, and (b) if that filename happens to exist on Commons, resolves to a DIFFERENT
+# photograph while looking entirely plausible. Both handlers must go through shareableTitles(), which is
+# the one place that filters `local` items out.
+_uses = len(re.findall(r"shareableTitles\(", js))
+if _uses < 3:                     # the definition plus the share link and the API command
+    bad.append(f"only {_uses} uses of shareableTitles() — both link builders must filter uploads out")
+    print(f"  MISSING: shareableTitles() is used {_uses} time(s); expected 3 (definition + 2 callers)")
+elif not re.search(r"filter\(it => !it\.local\)", js):
+    bad.append("shareableTitles() does not filter out local items")
+    print("  MISSING: shareableTitles() does not exclude uploaded images")
+else:
+    print(f"share links: {_uses - 1} callers of shareableTitles(), which drops uploads")
+
+# ---- every id the script reaches for must exist in the markup ---------------------------------------
+# A typo here is not a build error in a plain HTML page: `$("localtray")` returns null and the failure
+# surfaces later as "Cannot read properties of null", possibly only in one UI path. The DOM test runs the
+# real script, so it catches a *load-time* failure — but only as a jsdom error nobody reads. This costs
+# nothing and names the id. Literal `$("x")` calls only: `$("dl-" + f)` is built by concatenation.
+_ids = set(re.findall(r'\$\("([A-Za-z0-9_-]+)"\)', js))
+_missing = sorted(i for i in _ids if f'id="{i}"' not in html)
+if _missing:
+    bad.extend(f"$({i!r}) has no element with that id" for i in _missing)
+    print(f"  MISSING: the script references ids that do not exist: {_missing}")
+else:
+    print(f"element ids: all {len(_ids)} ids the script looks up exist in the HTML")
+
 sys.exit(1 if (r.returncode or bad) else 0)

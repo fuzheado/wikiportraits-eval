@@ -899,7 +899,7 @@ function finish() {
   c1.dd.getElementById('run').click();
   await c1.settle();
   ok(!c1.ran(), 'Score them refuses an over-cap list WITHOUT a round trip (no 413 to discover)');
-  ok(/4 photos and a run takes at most 3/.test(c1.dd.getElementById('jobstate').textContent),
+  ok(/4 images and a run takes at most 3/.test(c1.dd.getElementById('jobstate').textContent),
      'and says why, in the same words the pill used');
   ok(c1.box().length === 4, 'and the list is untouched by the refusal — nothing is silently dropped');
 
@@ -965,6 +965,138 @@ function finish() {
   c4.dd.getElementById('run').click();
   await c4.settle();
   ok(c4.ran(), 'and it is submitted — the stale over-cap count does not block a legal run');
+
+  // ---- local uploads (v0.21.0) ------------------------------------------------------------------
+  // jsdom has no canvas and no createImageBitmap, so the *resize* cannot be exercised here. What is
+  // tested is everything around it: the width is read from the server rather than typed in, an uploaded
+  // image never reaches a share link or a Commons URL, its ids travel in the run payload, it counts
+  // against the per-run cap, and the tray survives the things it should survive.
+  console.log('\nimages from your own computer');
+  {  // scoped: this file is long, and names like `ev`, `detail` and `mixed` are spoken for
+  const ev = (code) => win.eval(code);
+  const captured = [];
+  win.fetch = async (url, opts = {}) => ({
+    ok: true, status: 200,
+    json: async () => {
+      captured.push({ url: String(url), method: opts.method || 'GET',
+                      body: opts.body ? String(opts.body) : null });
+      const u = String(url);
+      if (u.includes('/api/parse')) return { items: [], warnings: [], n: 0 };
+      if (u.includes('/api/run')) return { job_id: 'J1', total: 1 };
+      if (u.includes('/api/config')) {
+        return { thumb_width_requested: 640, max_input_items: 200, eval_max: 25, budget: {} };
+      }
+      return {};
+    },
+  });
+  const HASH = 'a'.repeat(64);
+  const localItem = (extra = {}) => ({
+    title: 'IMG_0001.jpg', raw: 'IMG_0001.jpg', local: HASH, wiki: null, status: 'done',
+    thumburl: `/api/upload/${HASH}`, sent_px: '960x1280', orig_w: 4000, orig_h: 5333,
+    composite: 0.62, publish_p: 0.51, ...extra,
+  });
+
+  // The width must come from /api/config (the stub says 640): a hardcoded 960 would make an uploaded
+  // photo incomparable with a Commons one, and nothing on screen would look wrong.
+  ok(ev('uploadWidth()') === 640, 'the upload width is read from /api/config, not hardcoded');
+
+  // An upload must never travel in a link: it exists only in this session, and its "title" is a
+  // filename that may well belong to a DIFFERENT photograph on Commons.
+  const mixed = job([item('done'), localItem()]);
+  ok(ev('shareableTitles')(mixed).length === 1, 'the share list drops the uploaded image and keeps the rest');
+  ok(ev('localDropped')(mixed) === 1, '…and the count of what was left out is available');
+  ok(/2 images/.test(ev('localExcludedNote')(2)) && ev('localExcludedNote')(0) === '',
+     'the note states the number, and says nothing at all when there is nothing to say');
+
+  // …and the same exclusion holds for the buttons themselves, not just the helper.
+  render(mixed);
+  await ev('$("share").onclick')();
+  const localShareBox = doc.getElementById('shareurl').value;
+  ok(!localShareBox.includes('IMG_0001.jpg'), 'Copy share link never puts an uploaded filename in the URL');
+  ok(/cannot travel in a link/.test(localShareBox), '…and it explains why, in the box');
+
+  const rowUrl = (() => {
+    const r = [...doc.querySelectorAll('#items .item')].find(x => x.dataset.title === 'IMG_0001.jpg');
+    return r ? r.querySelector('a.thumblink').getAttribute('href') : null;
+  })();
+  ok(rowUrl === `/api/upload/${HASH}`, `a local row links to the image the server holds (${rowUrl})`);
+  const localRowHtml = [...doc.querySelectorAll('#items .item')]
+    .filter(x => x.dataset.title === 'IMG_0001.jpg').map(x => x.innerHTML).join('');
+  ok(!localRowHtml.includes('commons.wikimedia.org'),
+     'and never to a Commons page that would be a different photograph');
+
+  const detail = ev('detailHtml')(localItem());
+  ok(!detail.includes('commons.wikimedia.org'), 'the detail popup invents no Commons page for an upload');
+  ok(/uploaded from a computer/.test(detail), 'and says where the image came from');
+
+  // The ids have to reach the server, or the tray is decoration.
+  ev('clearAll()');
+  ev(`LOCAL.set('${HASH}', {id:'${HASH}', name:'IMG_0001.jpg', url:'/api/upload/${HASH}', w:960, h:1280, orig_w:4000, orig_h:5333, bytes:120000, sent_bytes:118000})`);
+  captured.length = 0;
+  ev('$("input").value = "File:Keep Me.jpg"');
+  await ev('startRun')();
+  const runCall = captured.find(c => c.url.includes('/api/run'));
+  const runBody = runCall ? JSON.parse(runCall.body) : {};
+  ok((runBody.local || []).length === 1 && (runBody.local || [])[0] === HASH,
+     'Score them sends the upload ids alongside the pasted list');
+  ok(runBody.text === 'File:Keep Me.jpg', '…and the pasted text is untouched by any of it');
+  // The successful start above armed a 1 Hz poll (the page's own timer). Its stub answers `{}`, and
+  // renderJob() then writes `undefined` into #jobstate — which would silently clobber the cap message
+  // asserted a few lines below. Stop it rather than let a background timer race the assertions.
+  ev('if (timer) { clearInterval(timer); timer = null; }');
+
+  // The per-run cap counts uploads too — they cost the same model call as a Commons photo.
+  // clearAll() first so the "start a new run?" modal (which jsdom can never answer) is not raised.
+  ev('clearAll()');
+  ev('configCache.max_input_items = 2; validatedCount = 1');   // 1 pasted + 1 upload = 2 of a cap of 2
+  captured.length = 0;
+  await ev('startRun')();
+  ok(captured.some(c => c.url.includes('/api/run')),
+     'CONTROL: a run of exactly 2 of a cap of 2 still runs (so the refusal below is not "it never runs")');
+  ev('validatedCount = 2');                                     // 2 pasted + 1 upload = 3 > 2
+  captured.length = 0;
+  await ev('startRun')();
+  ok(!captured.some(c => c.url.includes('/api/run')),
+     'a run that is over the cap ONLY because of uploads is refused before it costs anything');
+  ok(/takes at most/.test(doc.getElementById('jobstate').textContent),
+     '…and the page says so, in the same words it uses for a pasted list');
+  ev('configCache.max_input_items = 200; validatedCount = 0');
+
+  // Validate is about the *pasted* list: it must not throw away images in the tray.
+  // `clearAll()` first: validateList() opens the "start a new run?" modal when results are on screen,
+  // and in jsdom nothing will ever click it — the await would simply never settle.
+  ev('clearAll()');
+  ev('$("input").value = ""');
+  await ev('validateList')();
+  ok(ev('localCount()') === 1, 'Validate files leaves the uploaded images alone');
+  ok(!doc.getElementById('run').disabled,
+     'and with an empty box and one upload, Score them is armed (a tray-only run is a real run)');
+  ok(/local image/.test(doc.getElementById('parseinfo').textContent),
+     '…and the pill says so');
+
+  ev(`renderChip({id:'c', name:'two.jpg', url:'/api/upload/c', w:960, h:960, orig_w:960, orig_h:960, sent_bytes:90000})`);
+  ev('renderTray()');
+  ok(doc.querySelectorAll('#localtray .chip').length === 1, 'a chip is drawn for an image already uploaded');
+  ok(/IMG_0001.jpg/.test(doc.getElementById('localtray').textContent)
+     || /two.jpg/.test(doc.getElementById('localtray').textContent), 'the chip names the file');
+  ok(/1 local image ready/.test(doc.getElementById('localinfo').textContent),
+     'and the tray reports how many are ready');
+  ev('clearTray()');
+  ok(doc.querySelectorAll('#localtray .chip').length === 0 && ev('localCount()') === 0,
+     'clearTray() empties both the state and the markup');
+  ok(doc.getElementById('localtray').hidden, '…and hides the tray again');
+
+  // A tray-only run must be reachable without pressing "Validate files" (which is about the pasted
+  // list): dropping a file is a complete way to start, so the primary button has to arm itself.
+  ev('validatedCount = 0; $("input").value = ""');
+  ev('refreshStage()');
+  ok(doc.getElementById('run').disabled, 'with nothing to score, Score them is disabled');
+  ev(`LOCAL.set('${HASH}', {id:'${HASH}', name:'x.jpg', url:'/api/upload/${HASH}', w:960, h:960, orig_w:960, orig_h:960, bytes:1000, sent_bytes:1000})`);
+  ev('refreshStage()');
+  ok(!doc.getElementById('run').disabled, 'adding an image arms Score them with an empty box');
+  ev(`LOCAL.delete('${HASH}'); refreshStage()`);
+  ok(doc.getElementById('run').disabled, 'and removing it disarms again (no stale green light)');
+  }
 
   finish();
 })();

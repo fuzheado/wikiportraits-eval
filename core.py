@@ -6,7 +6,7 @@ traditional uWSGI path (`src/app.py` exposing `app`) run identical code.
 import base64, json, os, queue, re, threading, time, traceback, uuid
 from urllib.parse import parse_qs, urlparse
 
-import reports, wiclient
+import localstore, reports, wiclient
 from wiclient import (APP_VERSION, Budget, CANDIDATE_FLOOR, QUESTIONS, SCHEMA_HASH, STATE,
                       THUMB_WIDTH, SPACING)
 
@@ -45,12 +45,15 @@ JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
 MAX_JOBS_KEPT = int(os.environ.get("MAX_JOBS_KEPT", "100"))   # bounded job history (memory guard)
 PARSE_MAX = int(os.environ.get("PARSE_MAX", "1000"))         # cap /api/parse resolve batches
-# Request-body ceiling, enforced by both backends before a byte is read. 1 MiB is ~10x the largest
-# body this app legitimately receives (PARSE_MAX 1000 titles is ~100 KB, and the /api/eval cap is 25
-# files). It exists because nothing else caps it: measured 2026-10-16, Toolforge's ingress accepted a
-# 32 MiB POST and the app buffered the whole thing inside a 512 MiB container. Published in
-# /api/config, so the boundary is stated rather than discovered.
 MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", str(1024 * 1024)))
+
+
+# Uploaded images are held by `localstore` in memory only — see that module for why, and for the
+# memory caps. **The per-image cap is the smaller of the store's own limit and the body ceiling:** a
+# body above MAX_BODY_BYTES is refused by both backends before this module is reached at all, so an
+# upload cap above that ceiling would advertise a number the server can never accept. Reconciled
+# 2026-10-16 when the ceiling arrived from a parallel branch — `tests/test_local.py` asserts it.
+MAX_UPLOAD_BYTES = min(localstore.MAX_UPLOAD_BYTES, MAX_BODY_BYTES)
 
 
 def body_too_large(n: int):
@@ -62,25 +65,82 @@ def body_too_large(n: int):
     if n > MAX_BODY_BYTES:
         return (413, "application/json",
                 json.dumps({"error": f"request body is {n} bytes; this server accepts at most "
-                                     f"{MAX_BODY_BYTES} (MAX_BODY_BYTES) — send a shorter list, "
-                                     f"or raise the limit on the server"},
+                                     f"{MAX_BODY_BYTES} (MAX_BODY_BYTES) — that is a very long list, "
+                                     f"or an image larger than this app accepts (see "
+                                     f"local.max_upload_bytes in /api/config). Raise the limit on "
+                                     f"the server if neither is what you meant"},
                            ensure_ascii=False).encode(), {})
     return None
 
 
 # ------------------------------------------------------------------ job store
-def new_job(payload, no_cache=False, cached_only=False):
+def _uniq(seq):
+    """The sequence with duplicates removed, order kept.
+
+    `new_job` is the authoritative place a run's items are built, so it de-duplicates upload ids
+    itself rather than trusting `_local_ids` (the request parser) to have done it: the guarantee is
+    "one id, one row", and it has to hold however a job was constructed — a route, a test, a script.
+    """
+    out, seen = [], set()
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _dedupe_titles(items):
+    """Make every item's display title unique within one run.
+
+    The page keys its result rows, its chart nodes and the detail popup on the title, so two items
+    sharing one would silently collapse into a single row — the same failure a duplicate `pageid`
+    caused in a test fixture on 2026-10-16. Same rule the upload store applies to filenames, applied
+    once more across the whole run, because a pasted `IMG_0001.jpg` and an uploaded one can collide.
+    """
+    seen = {}
+    for item in items:
+        base = item.get("title") or item.get("raw") or ""
+        seen[base] = seen.get(base, 0) + 1
+        if seen[base] > 1:
+            item["title"] = f"{base} ({seen[base]})"
+
+
+def new_job(payload, no_cache=False, cached_only=False, local_ids=None):
     if isinstance(payload, str):
         parsed = wiclient.parse_entries(payload)
         entries, warnings = parsed["items"], parsed["warnings"]
     else:
         entries = [{"raw": t, "title": t} for t in payload]
         warnings = []
+    items = [{"raw": e["raw"], "title": e["title"], "status": "pending",
+              "wiki": e.get("wiki", "commons.wikimedia.org")} for e in entries]
+    # Uploaded images ride along in the same job as the pasted titles, which is what makes every part
+    # of the page work on them unchanged: they are ranked, charted, opened in the popup and reported
+    # by the same code, because they are the same kind of item. `wiki` is None so the Commons lookup
+    # skips them, and `local` is the store id — never a filename, which is only a label.
+    for lid in _uniq([str(x).strip() for x in (local_ids or []) if str(x).strip()]):
+        m = localstore.meta(lid)
+        name = (localstore.unique_names([lid]).get(lid) or lid[:8])
+        if not m:
+            # Uploaded, then evicted or lost to a restart before the run started. Say which, rather
+            # than scoring a row that cannot be fetched or, worse, quietly dropping it.
+            items.append({"raw": name, "title": name, "wiki": None, "local": lid,
+                          "status": "error", "local_gone": True,
+                          "error": "this upload is no longer held in the server's memory (it was "
+                                   "evicted, or the service restarted) — add the file again"})
+            continue
+        items.append({"raw": name, "title": name, "wiki": None, "local": lid,
+                      "status": "pending", "thumburl": f"/api/upload/{lid}",
+                      "orig_w": m.get("orig_w"), "orig_h": m.get("orig_h"),
+                      "upload_bytes": m.get("bytes")})
+    # …and the names must be unique across the whole run, not just among the uploads: a pasted
+    # `IMG_0001.jpg` title and an uploaded `IMG_0001.jpg` would otherwise share a title, and the page
+    # keys its rows, chart nodes and popup on exactly that (invariant 3).
+    _dedupe_titles(items)
     job = {"id": uuid.uuid4().hex[:12], "created": time.time(), "status": "queued",
            "no_cache": bool(no_cache), "cached_only": bool(cached_only),
-           "progress": {"done": 0, "total": len(entries)}, "warnings": warnings,
-           "items": [{"raw": e["raw"], "title": e["title"], "status": "pending",
-                      "wiki": e.get("wiki", "commons.wikimedia.org")} for e in entries],
+           "progress": {"done": 0, "total": len(items)}, "warnings": warnings,
+           "items": items,
            "log": [], "stats": {}, "elapsed_s": None}
     with JOBS_LOCK:
         # keep the job store bounded: finished/errored jobs are evicted oldest-first so a client
@@ -178,7 +238,13 @@ def _save_thumb(item, data: bytes):
     Deliberately narrow: a bare `except Exception` in this spot once hid a NameError for hours
     (the cache-hit path called `thumb_path()` outside this helper and died), so a coding error must
     surface as a failure rather than as a silent "no thumbnail".
+
+    Uploads never get here with a path: an image from someone's own disk is held in memory and is not
+    written anywhere (localstore.py). The guard is in this one place so no future call site can
+    accidentally put a person's file on disk.
     """
+    if item.get("local"):
+        return None
     try:
         os.makedirs(THUMBS_DIR, exist_ok=True)
         p = thumb_path(item.get("pageid"), item.get("sha1"), item.get("wiki"))
@@ -192,6 +258,8 @@ def _save_thumb(item, data: bytes):
 
 def saved_thumb(item):
     """The path of a saved thumbnail for an already-answered photo, if it is still on disk."""
+    if item.get("local"):
+        return None                     # nothing was ever written to disk for an upload
     try:
         p = thumb_path(item.get("pageid"), item.get("sha1"), item.get("wiki"))
     except (NameError, TypeError):
@@ -200,7 +268,11 @@ def saved_thumb(item):
 
 
 def thumb_bytes(item):
-    """Bytes for a report: from the saved file if present, else fetched from Commons."""
+    """Bytes for a report: from memory for an upload, else the saved file, else Commons."""
+    if item.get("local"):
+        # There is no file to look for and no URL to fetch: an upload exists only in this process.
+        # If the store has since evicted it, the report simply has no image for that row.
+        return localstore.get(item["local"])
     p = item.get("thumb_file")
     if p and os.path.exists(p):
         try:
@@ -226,10 +298,17 @@ def _download(item):
     so a pathological file cannot clog the pipeline.
     """
     t = time.time()
-    data = wiclient.fetch_bytes(item["thumburl"])
+    if item.get("local"):
+        # An uploaded image, straight from this process's memory — no network, no disk.
+        data = localstore.get(item["local"])
+        if not data:
+            raise ValueError("the server no longer holds this upload (it was evicted, or the "
+                             "service restarted) — add the file again")
+    else:
+        data = wiclient.fetch_bytes(item["thumburl"])
     size = wiclient.image_size(data)
     if size and size[0] * size[1] > wiclient.MAX_SEND_PIXELS:
-        raise ValueError(f"rendered thumbnail is {size[0]}x{size[1]} px — above the "
+        raise ValueError(f"this image is {size[0]}x{size[1]} px — above the "
                          f"{wiclient.MAX_SEND_PIXELS}-px cap")
     # Cross-check the two independent signals for the width the model will have seen: the `/Npx-`
     # segment of the URL we fetched, and the bytes themselves. If a CDN or proxy ever serves a
@@ -238,7 +317,7 @@ def _download(item):
     url_w = item.get("served_w")
     if size and url_w and url_w != size[0]:
         item["width_mismatch"] = (f"thumburl advertises {url_w}px, bytes decode as {size[0]}px")
-    _save_thumb(item, data)
+    _save_thumb(item, data)          # a no-op for uploads: those are never written to disk
     return (base64.b64encode(data).decode(), f"{size[0]}x{size[1]}" if size else "unknown",
             time.time() - t)
 
@@ -448,17 +527,35 @@ def _refresh_derived(job):
 
 
 def run_job(job):
+    """Run one job, holding on to any uploaded images it is about to use.
+
+    The pin matters: `localstore` evicts its least recently used entries to stay inside its memory
+    cap, and a run must not have an image evicted out from under it between the upload and the model
+    call. Everything else about a run lives in `_run_job`.
+    """
+    with localstore.hold([i["local"] for i in job["items"] if i.get("local")]):
+        _run_job(job)
+
+
+def _run_job(job):
     job["status"] = "running"
     t0 = time.time()
     try:
-        log(job, "resolving %d titles on %s" % (len(job["items"]),
-            ", ".join(sorted({i.get("wiki", "commons.wikimedia.org") for i in job["items"]}))))
-        meta = wiclient.resolve([{"title": i["title"], "wiki": i.get("wiki")} for i in job["items"]])
+        # Uploaded images have no Commons title to look up: `wiki` is None on them and they are
+        # already resolved by construction, so leave them out of the API call entirely rather than
+        # asking Commons about a filename only the uploader has.
+        lookup = [{"title": i["title"], "wiki": i.get("wiki")} for i in job["items"]
+                  if not i.get("local")]
+        log(job, "resolving %d titles on %s" % (len(lookup),
+            ", ".join(sorted({i.get("wiki") or "commons.wikimedia.org" for i in lookup})) or "-"))
+        meta = wiclient.resolve(lookup) if lookup else {}
     except Exception as e:
         job["status"] = "error"
         job["error"] = f"Commons lookup failed: {e}"
         return
     for item in job["items"]:
+        if item.get("local"):
+            continue
         m = meta.get((item.get("wiki") or "commons.wikimedia.org", item["title"])) or {}
         item.update({k: v for k, v in m.items() if k != "ok"})
         if not m.get("ok"):
@@ -477,7 +574,22 @@ def run_job(job):
                  "cannot spend a model call — anything not already scored is left for you")
     pending = []
     for item in job["items"]:
-        if item["status"] == "notfound":
+        if item["status"] == "notfound" or item.get("local_gone"):
+            continue
+        if item.get("local"):
+            # An upload is never read from, and never written to, the answer cache. Two reasons, and
+            # the second is not about privacy: the cache is keyed on (pageid, sha1, served_w), and an
+            # uploaded file has none of those — so every local image would share the key
+            # `(None, None, None)` and two different uploads would hand each other's answers back.
+            # The privacy reason is the stronger one: a person's own file must not be remembered by
+            # this service after the process that received it is gone (localstore.py).
+            if replay:
+                item["status"] = "uncached"
+                item["error"] = ("a replay never scores anything, and an uploaded image has no saved "
+                                 "answer — press Score them to evaluate it")
+                log(job, f"{item['title']} — local upload (replay: not scored)")
+            else:
+                pending.append(item)
             continue
         hit = None if bypass else cache_get(item["pageid"], item.get("sha1"),
                                             item.get("wiki", "commons.wikimedia.org"),
@@ -602,9 +714,11 @@ def run_job(job):
             if res.get("http") == 200:
                 consecutive_upstream_failures = 0
                 item.update({"status": "done", "resolved": True, "result": res, "from_cache": False})
-                cache_put(item["pageid"], item.get("sha1"),
-                          {"result": res, "sent_px": item["sent_px"], "title": item["title"]},
-                          item.get("wiki", "commons.wikimedia.org"), item.get("served_w"))
+                if not item.get("local"):
+                    # never cache an uploaded image's answer — see the cache pass in run_job
+                    cache_put(item["pageid"], item.get("sha1"),
+                              {"result": res, "sent_px": item["sent_px"], "title": item["title"]},
+                              item.get("wiki", "commons.wikimedia.org"), item.get("served_w"))
                 score_s += res.get("wall_s") or 0
                 a = res["answers"]
                 pub = wiclient.publish_p(a)
@@ -770,6 +884,29 @@ def about_payload() -> dict:
                   "capped: refused past ~4,000 characters, and the input check is never run "
                   "automatically for more than 50 entries. <b>A link never starts a run</b> — "
                   "scoring always takes a click, because it spends a model call per photo.</p>")},
+        {"title": "Local images from your own computer",
+         "html": ("<p>You can evaluate images from your own machine — drag them onto the input "
+                  "box, or use <i>Add image files</i> — and they are ranked in the same chart and the "
+                  "same cards as Commons photos, in the same run.</p>"
+                  "<p><b>They are resized in your browser, not on the server.</b> The model only ever "
+                  "sees " + str(wiclient.MODEL_MAX_WIDTH) + "&nbsp;px wide (the vision encoder "
+                  "normalises everything to that), so your browser scales each file down to "
+                  + str(THUMB_WIDTH) + "&nbsp;px wide — the same size the Commons thumbnails are "
+                  "fetched at — and uploads <i>that</i>. A 5000-pixel photo therefore costs a few "
+                  "hundred kilobytes, and the "
+                  "comparison with a Commons run is like for like. The resize also re-encodes the "
+                  "image, which drops the camera's EXIF metadata — including GPS — before it ever "
+                  "leaves your computer; the server never receives it, and rotation is applied "
+                  "first so a portrait photo is not judged sideways.</p>"
+                  "<p><b>Identifying them:</b> by content, never by filename. The upload gets a "
+                  "sha256 of its bytes, which is its identity everywhere in the app — so adding the "
+                  "same file twice is one image, two photos called <code>IMG_0001.jpg</code> stay two, "
+                  "and no filename is trusted for anything. The name is kept only as a label.</p>"
+                  "<p><b>Not everything can be read:</b> JPEG, PNG, GIF and WebP. A HEIC straight "
+                  "from an iPhone can only be decoded by a browser that understands it (Safari can; "
+                  "Chrome and Firefox cannot) — where it cannot, the file is refused with that "
+                  "explanation rather than sent as something the server would have to guess at. "
+                  "Converting it to JPEG first always works.</p>")},
         {"title": "How a run works, step by step",
          "html": ("<ol>"
            "<li><b>Parse and normalise</b> each pasted line to a <code>File:</code> title. A line "
@@ -928,7 +1065,19 @@ def about_payload() -> dict:
                   "status — no query string, no IP address and no User-Agent — plus a per-run log "
                   "held in memory and a per-photo cache entry. Toolforge logs requests at the "
                   "platform layer; this app neither reads nor republishes that. If usage is ever "
-                  "measured it will be as counters, not as logs.</li></ul>")},
+                  "measured it will be as counters, not as logs.</li>"
+                  "<li><b>Uploaded images are the deliberate exception to all of that:</b> an image "
+                  "you add from your own computer is held in this process's memory and "
+                  "<b>nowhere else</b> — never written under <code>cache/</code>, never on disk, "
+                  "never in a backup, and gone the moment the service restarts (every deploy does). "
+                  "No answer for it is cached either, so nobody can re-score it later, and the only "
+                  "things that ever see it are this server and the model endpoint that scores it. "
+                  "It is served back to your browser with <code>Cache-Control: private, "
+                  "no-store</code> so no shared cache on the way keeps a copy, and the store drops "
+                  "uploads past " + str(localstore.MAX_LOCAL_BYTES // (1024 * 1024)) + "&nbsp;MB "
+                  "or " + str(localstore.LOCAL_TTL_S // 3600) + "&nbsp;hours idle. There is no "
+                  "endpoint that lists what has been uploaded, and nothing about an upload is "
+                  "shared by a share link.</li></ul>")},
         {"title": "HTTP API",
          "html": ("<p>Everything the page does is also available programmatically. Client "
                   "timeout should be generous — a call blocks until the whole run finishes "
@@ -954,7 +1103,19 @@ def about_payload() -> dict:
                   "<p><code>/api/eval</code> returns ranked <code>results[]</code> (composite, "
                   "P(publish), pose, quality, per-question probabilities, licence, cache/wall "
                   "info), the run's <code>spread</code> and <code>stats</code>, and links to the "
-                  "four reports. It honours the same cache, budget and 429 rules as the UI.</p>")},
+                  "four reports. It honours the same cache, budget and 429 rules as the UI.</p>"
+                  "<p>Local images have two endpoints of their own: <code>POST /api/upload?name=F.jpg</code> "
+                  "with the image as the raw request body (not multipart — no form parser exists here, "
+                  "and none is needed) returns an <code>id</code>; passing those ids as "
+                  "<code>\"local\": [\"<id>\", …]</code> on <code>/api/run</code> or "
+                  "<code>/api/eval</code> scores them alongside Commons titles, and "
+                  "<code>GET /api/upload/&lt;id&gt;</code> serves the bytes back. The id is the "
+                  "sha256 of the image, so the same file is never stored twice, and the store holds "
+                  "everything in memory: ≤ " + str(localstore.MAX_UPLOAD_BYTES // 1024) + "&nbsp;KB "
+                  "per image, ≤ " + str(localstore.MAX_LOCAL_BYTES // (1024 * 1024)) + "&nbsp;MB in "
+                  "total, dropped after " + str(localstore.LOCAL_TTL_S // 3600) + "&nbsp;h idle and "
+                  "on every restart. <code>GET /api/config</code> publishes those limits under "
+                  "<code>local</code>.</p>")},
         {"title": "Provenance",
          "html": (f"<ul><li>App version {esc(APP_VERSION)} · model "
                   f"<code>llm-clef-flash</code> (clef-flash 9B, Apache-2.0) — BF16, 16,384-token "
@@ -1016,6 +1177,78 @@ def _read_static(fname):
              "text/html; charset=utf-8" if fname.endswith(".html") else "application/octet-stream")
     with open(full, "rb") as fh:
         return ctype, fh.read()
+
+
+def _parse_dims(text: str):
+    """`"5152x7728"` -> `(5152, 7728)`; anything unrecognised -> `(None, None)`.
+
+    Supplied by the page, which read it off the file before resizing it (the resize is done in the
+    browser — see static/index.html — because a stdlib-only server has no decoder). It is a *label*,
+    never trusted for anything that matters: the size actually sent is measured from the bytes below.
+    """
+    m = re.match(r"^\s*(\d{1,6})\s*[x×]\s*(\d{1,6})\s*$", text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+def _upload(data: bytes, query: str) -> tuple:
+    """POST /api/upload?name=<filename>&orig=<W>x<H> — the request body *is* the image.
+
+    Deliberately not multipart. The only client is this app's own page, which already holds the
+    resized image as a Blob, so the simplest thing that cannot be mis-parsed is the bytes themselves
+    with their labels in the query string — and it means the stdlib-only server needs no form parser.
+
+    Nothing about the request's `Content-Type` is trusted: the format is read from the magic bytes,
+    and a file that is not one of the four `image_size()` can measure is refused rather than stored,
+    because an unmeasurable upload could not be checked against the pixel cap either.
+    """
+    q = parse_qs(query or "")
+    name = (q.get("name", [""])[0] or "").strip()[:120]
+    orig = _parse_dims(q.get("orig", [""])[0])
+    if len(data) > MAX_UPLOAD_BYTES:
+        # Reachable only for a non-browser client: the page resizes to 960 px wide first, which lands
+        # around 25-300 KB. Say so, because "your upload is too big" would suggest trying a smaller
+        # file when the real answer is usually that the resize did not happen at all.
+        return (413, "application/json", json.dumps({
+            "error": f"that image is {len(data)} bytes and this server accepts at most "
+                     f"{MAX_UPLOAD_BYTES} per upload (max_upload_bytes in /api/config — the same as "
+                     f"the request-body ceiling). The page resizes every image to "
+                     f"{THUMB_WIDTH} px wide before sending, which is far smaller than this"}).encode(), {})
+    mime = wiclient.image_mime(data)
+    if not mime:
+        return (400, "application/json", json.dumps({"error": "that file is not a JPEG, PNG, GIF "
+                "or WebP image this server can read; export it as JPEG and add it again"}).encode(), {})
+    size = wiclient.image_size(data)
+    if not size:
+        return (400, "application/json", json.dumps({"error": "the image's dimensions could not "
+                "be read — the file looks truncated"}).encode(), {})
+    if size[0] * size[1] > wiclient.MAX_SEND_PIXELS:
+        return (413, "application/json", json.dumps({"error": f"that image is {size[0]}x{size[1]} "
+                f"px — above the {wiclient.MAX_SEND_PIXELS} px cap the model call allows"}).encode(), {})
+    try:
+        entry = localstore.put(data, name=name, mime=mime, orig=orig)
+    except localstore.Rejected as e:
+        return (e.status, "application/json", json.dumps({"error": str(e)}).encode(), {})
+    return (200, "application/json", json.dumps({
+        "id": entry["id"], "name": name, "url": f"/api/upload/{entry['id']}",
+        "bytes": entry["bytes"], "w": size[0], "h": size[1],
+        "orig_w": entry.get("orig_w"), "orig_h": entry.get("orig_h"), "mime": mime,
+        "duplicate": bool(entry.get("duplicate")),
+        "store": localstore.stats()}).encode(), {})
+
+
+def _local_ids(data: dict) -> list:
+    """The upload ids in a run request, in the order the user added them.
+
+    De-duplicated, because an id is the sha256 of the image's bytes and the same file added twice is
+    one image. **Deliberately NOT truncated to the per-run cap:** an earlier version sliced the list
+    with `[:MAX_INPUT_ITEMS]`, which made an over-cap request quietly score the first 200 uploads
+    instead of refusing it — a silent overflow bucket that hides photos, and the exact failure the
+    cap exists to prevent. The cap is enforced by the callers, which return 413 with the count.
+    """
+    raw = data.get("local")
+    if isinstance(raw, str):
+        raw = [raw]
+    return _uniq([str(x).strip() for x in (raw or []) if str(x).strip()])
 
 
 def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
@@ -1083,8 +1316,30 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                                                      "thumbnail URL) and sent_px (decoded from "
                                                      "the bytes) on each result item"},
                            "schema_hash": SCHEMA_HASH, "questions": QUESTIONS,
+                           # Local uploads: what this server will accept, and — the part a user
+                           # actually needs to know — for how long it will keep it. Held in memory
+                           # only; see localstore.py.
+                           "local": {**localstore.stats(),
+                                     "accepts": ["image/jpeg", "image/png", "image/gif",
+                                                  "image/webp"],
+                                     "note": "uploaded images live in memory only and are never "
+                                             "written to disk; they are dropped when the service "
+                                             "restarts"},
                            "budget": BUDGET.status(), "cache_dir": CACHE_DIR,
                            "cache_entries": len([f for f in os.listdir(CACHE_DIR) if f.endswith(".json")])})
+            if path.startswith("/api/upload/"):
+                # The uploaded bytes, back out to the page that uploaded them: this is what the
+                # result cards, the chart thumbnails, the detail popup and the PDF all display.
+                img_id = path[len("/api/upload/"):].strip("/")
+                blob = localstore.get(img_id)
+                if not blob:
+                    return js({"error": "no such upload on this server — uploads are held in memory "
+                                        "only, and are dropped when the service restarts"}, 404)
+                return (200, (localstore.meta(img_id) or {}).get("mime") or "application/octet-stream",
+                        blob,
+                        # Somebody's own photograph must not come to rest in any shared cache on the
+                        # way back out, and must not be indexed.
+                        {"Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow"})
             if path.startswith("/api/job/"):
                 parts = path.strip("/").split("/")
                 job = JOBS.get(parts[2]) if len(parts) > 2 else None
@@ -1096,6 +1351,9 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
             return js({"error": "not found"}, 404)
 
         if method == "POST":
+            if path == "/api/upload":
+                # Before the JSON parse below: this route's request body *is* the image.
+                return _upload(body, query)
             try:
                 data = json.loads(body.decode() or "{}") if body else {}
             except ValueError as exc:
@@ -1123,20 +1381,25 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                 if isinstance(files, str):
                     files = [files]
                 files = [str(f).strip() for f in (files or []) if str(f).strip()]
-                if not files:
-                    return js({"error": 'POST JSON {"files": ["File:A.jpg", ...]} — up to '
-                                        f"{EVAL_MAX} per call (raise the EVAL_MAX env var if you "
-                                        "need more)"}, 400)
-                if len(files) > EVAL_MAX:
-                    return js({"error": f"at most {EVAL_MAX} files per /api/eval call "
-                                        f"(got {len(files)})"}, 413)
-                if len(files) > MAX_INPUT_ITEMS:
+                # …or images this server is already holding from the page's upload box. They are the
+                # same kind of work — one model call each — so they count against the same caps.
+                local = _local_ids(data)
+                n_in = len(files) + len(local)
+                if not n_in:
+                    return js({"error": 'POST JSON {"files": ["File:A.jpg", ...]} or '
+                                        '{"local": ["<upload id>", ...]} — up to '
+                                        f"{EVAL_MAX} images per call (raise the EVAL_MAX env var "
+                                        "if you need more)"}, 400)
+                if n_in > EVAL_MAX:
+                    return js({"error": f"at most {EVAL_MAX} images per /api/eval call "
+                                        f"(got {n_in})"}, 413)
+                if n_in > MAX_INPUT_ITEMS:
                     return js({"error": f"at most {MAX_INPUT_ITEMS} images per run "
-                                        f"(MAX_INPUT_ITEMS; got {len(files)})"}, 413)
+                                        f"(MAX_INPUT_ITEMS; got {n_in})"}, 413)
                 active = [j for j in JOBS.values() if j["status"] in ("queued", "running")]
                 if len(active) >= MAX_PARALLEL_JOBS:
                     return js({"error": "another run is already in progress"}, 409)
-                job = new_job("\n".join(files), no_cache=data.get("no_cache"))
+                job = new_job("\n".join(files), no_cache=data.get("no_cache"), local_ids=local)
                 if not job["items"]:
                     return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
                 run_job(job)          # synchronous: /api/eval blocks until the whole run finishes
@@ -1166,7 +1429,8 @@ def route(method: str, path: str, body: bytes = b"", query: str = "") -> tuple:
                     return js({"error": "another run is already in progress"}, 409)
                 job = new_job(data.get("items") or data.get("text", ""),
                               no_cache=data.get("no_cache"),
-                              cached_only=data.get("cached_only"))
+                              cached_only=data.get("cached_only"),
+                              local_ids=_local_ids(data))
                 if not job["items"]:
                     return js({"error": "nothing to score", "warnings": job["warnings"]}, 400)
                 if len(job["items"]) > MAX_INPUT_ITEMS:
@@ -1200,11 +1464,16 @@ def _eval_row(item: dict) -> dict:
     a = (item.get("result") or {}).get("answers") or {}
     pose = a.get("pose") or {}
     title = item.get("title")
+    local = bool(item.get("local"))
     return {"title": title, "pageid": item.get("pageid"), "wiki": item.get("wiki"),
+            "local": local,
             "status": item.get("status"), "error": item.get("error"),
             "from_cache": item.get("from_cache"),
+            # An uploaded image has no Commons page, and inventing one from its filename would be a
+            # link to whatever that name happens to be on Commons — a different photograph.
             "commons_url": ("https://commons.wikimedia.org/wiki/"
-                            + title.replace(" ", "_")) if title else None,
+                            + title.replace(" ", "_")) if (title and not local) else None,
+            "image_url": item.get("thumburl"),
             "license": item.get("license"),
             "composite": item.get("composite"), "publish_p": item.get("publish_p"),
             "infobox_ready": (a.get("infobox_ready") or {}).get("noul"),

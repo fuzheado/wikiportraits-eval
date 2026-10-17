@@ -8,7 +8,7 @@ import urllib.error, urllib.parse, urllib.request
 # The app version lives here rather than in core.py because both need it: core reports it (About,
 # reports) and this module puts it in the default User-Agent. One source of truth — before this, the
 # UA hard-coded "0.4" and drifted three releases behind the version the app displayed.
-APP_VERSION = "0.20.6"
+APP_VERSION = "0.21.0"
 UA = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
     f"WikiPortraitsEval/{APP_VERSION} (https://github.com/fuzheado/wikiportraits-eval)")
@@ -558,6 +558,16 @@ def fetch_bytes(url: str, timeout: int = 120) -> bytes:
     return b"".join(chunks)
 
 
+def _size_ok(w, h):
+    """Reject a degenerate size: a zero dimension means a truncated header, not a 0-pixel image.
+
+    Without this a 12-byte file beginning with the PNG magic reads as `0×0`, and `0×0` sails through
+    the `w*h > MAX_SEND_PIXELS` check — so a corrupt upload would be stored and scored rather than
+    refused. Found by a negative control in tests/test_local.py, 2026-10-16.
+    """
+    return (w, h) if w > 0 and h > 0 else None
+
+
 def image_size(data: bytes):
     """Width/height without Pillow: JPEG, PNG, GIF, WebP."""
     try:
@@ -572,24 +582,46 @@ def image_size(data: bytes):
                               0xCD, 0xCE, 0xCF):
                     h = int.from_bytes(data[i + 5:i + 7], "big")
                     w = int.from_bytes(data[i + 7:i + 9], "big")
-                    return w, h
+                    return _size_ok(w, h)
                 i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
         elif data[:8] == b"\x89PNG\r\n\x1a\n":
-            return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+            return _size_ok(int.from_bytes(data[16:20], "big"),
+                            int.from_bytes(data[20:24], "big"))
         elif data[:6] in (b"GIF87a", b"GIF89a"):
-            return (int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little"))
+            return _size_ok(int.from_bytes(data[6:8], "little"),
+                            int.from_bytes(data[8:10], "little"))
         elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
             if data[12:16] == b"VP8X":
-                return (int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1)
+                return _size_ok(int.from_bytes(data[24:27], "little") + 1,
+                                int.from_bytes(data[27:30], "little") + 1)
             if data[12:16] == b"VP8 ":
-                return (int.from_bytes(data[26:28], "little") & 0x3FFF,
-                        int.from_bytes(data[28:30], "little") & 0x3FFF)
+                return _size_ok(int.from_bytes(data[26:28], "little") & 0x3FFF,
+                                int.from_bytes(data[28:30], "little") & 0x3FFF)
     except Exception:
         return None
     return None
 
 
 # -------------------------------------------------------------- LiftWing call
+def image_mime(data: bytes):
+    """The format of an image from its magic bytes — the same four `image_size` can measure.
+
+    Only used to label an upload (and to answer with the right Content-Type when the page shows it
+    back). A file whose magic bytes are not one of these is not an image this server can measure, and
+    is refused rather than stored on a guess: an unmeasurable upload could not be checked against
+    MAX_SEND_PIXELS either, and "some bytes we hoped were a photo" is not a thing to hold on to.
+    """
+    if data[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def probe_endpoint(timeout: int = 45) -> dict:
     """One tiny text-only call: is the endpoint answering at all, before a run spends the queue?
 

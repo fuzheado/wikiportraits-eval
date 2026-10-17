@@ -47,6 +47,23 @@
   .bar{height:12px;background:var(--bar);border-radius:999px;overflow:hidden}
   .bar > span{display:block;height:100%;background:var(--blue);width:0;transition:width .3s}
   .meter{font-size:12px;color:var(--muted)}
+  /* Uploading images from your own computer (v0.21.0). The dropzone is deliberately quiet: it sits
+     under the textarea as a second way in, not as a competing call to action. The `.over` state is
+     the only feedback that a drag will be accepted, so it must be obvious. */
+  .dropzone{border:1.5px dashed var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;
+            display:flex;gap:8px 12px;flex-wrap:wrap;align-items:center;background:#fbfcfe;
+            color:var(--muted);font-size:13px}
+  .dropzone.over{border-color:var(--blue);background:#eef4fb}
+  .dropzone.busy{opacity:.6}
+  .localtray{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .chip{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:999px;
+        padding:3px 4px 3px 10px;font-size:12px;background:#fff;max-width:100%}
+  .chip img{width:26px;height:26px;object-fit:cover;border-radius:6px;flex:0 0 26px;background:var(--bar)}
+  .chip .cname{max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip button{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;
+               padding:2px 6px;border-radius:999px}
+  .chip button:hover{background:#f0f2f6;color:var(--red)}
+  .chip.err{border-color:var(--red);color:var(--red);background:#fdf3f2}
   /* the box starts empty: the examples are a grey hint, never content, so nothing in it can be run
      by accident. Clicking in blanks the hint entirely (see the focus/blur handlers). */
   #input::placeholder{color:#9aa7b6;opacity:1}
@@ -239,6 +256,15 @@
       section 2)</span></label>
     <textarea id="input" spellcheck="false"
       placeholder="Foo.jpg&#10;File:Foo.jpg&#10;https://commons.wikimedia.org/wiki/File:Foo.jpg&#10;https://upload.wikimedia.org/wikipedia/commons/0/06/Foo.jpg&#10;&#10;example formats only — this is a hint, not a list. Paste your own, or press “Load sample list” for 12 real Commons photos."></textarea>
+    <div id="dropzone" class="dropzone">
+      <span><b>Drop image files here</b> — or <button id="pick" class="mini" type="button"
+        title="Choose images from this computer to evaluate alongside — or instead of — a pasted list">Add image files</button></span>
+      <input type="file" id="filepick" accept="image/*" multiple hidden>
+      <span class="meter">JPEG, PNG, GIF or WebP. Each file is resized in your browser before it is
+        sent, and the server holds it in memory only — never on disk.</span>
+      <span id="localinfo" class="pill"></span>
+    </div>
+    <div id="localtray" class="localtray" hidden></div>
     <div class="row" style="margin-top:10px">
       <button id="load-test" title="Load the 12 sample photos from default_list.txt so you can try a real run">Load sample list</button>
       <button id="check" class="primary">Validate files</button>
@@ -469,7 +495,10 @@ function renderItem(it, i, rank, pos) {
     ? ` · composite rank ${rank} of ${orderInfo.n}` : "";
   row.status.textContent = STATUS_LABEL[it.status] || it.status || "pending";
   row.status.className = "status st-" + (it.status || "pending");
-  const commons = it.title ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
+  // No Commons page for an uploaded image: its "title" is a filename from somebody's laptop, so the
+  // usual URL would point at whatever that name happens to be on Commons — a different photograph.
+  const commons = (it.title && !it.local)
+    ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
   if (it.thumburl) {
     if (row.img.getAttribute("src") !== it.thumburl) {      // set once, never re-created
       row.img.setAttribute("src", it.thumburl);
@@ -1129,6 +1158,7 @@ async function resetSession() {
       + "you want to do this?";
   if (!(await askConfirm())) return;
   clearAll();
+  clearTray();                 // uploads belong to a session, so "new session" is where they go
   $("input").value = "";
   $("input").classList.remove("hint-off");
   setStage("idle");
@@ -1147,16 +1177,18 @@ $("reset").addEventListener("keydown", (e) => {
 function detailHtml(it) {
   const a = ((it.result || {}).answers) || {};
   const title = it.title || it.raw || "";
-  const commons = it.title
+  const commons = (it.title && !it.local)
     ? `https://commons.wikimedia.org/wiki/${encodeURI(it.title.replace(/ /g, "_"))}` : "";
   const facts = [
     it.sent_px ? `model saw ${esc(it.sent_px)}` : "",
     it.orig_w ? `original ${it.orig_w}×${it.orig_h}` : "",
     it.license || "",
+    it.local ? "uploaded from a computer — not a Commons file" : "",
     it.from_cache ? "from cache" : "",
   ].filter(Boolean).join(" · ");
   const links = [
     commons ? `<a href="${commons}" target="_blank" rel="noopener">Commons page ↗</a>` : "",
+    it.local ? `<a href="${esc(it.thumburl || "#")}" target="_blank" rel="noopener">the uploaded image ↗</a>` : "",
     it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener">full-resolution file ↗</a>` : "",
   ].filter(Boolean).join(" · ");
   const shown = it.thumburl
@@ -1350,6 +1382,193 @@ function setStage(stage) {
   }
 }
 
+// ---- images from your own computer (v0.21.0) ------------------------------------------------------
+// The browser is the only downscaler this app has: the server is deliberately stdlib-only, so there is
+// no Pillow there to resize with. That costs nothing in practice — the model normalises every input to
+// 640 px wide (wiclient.MODEL_MAX_WIDTH), and the Commons path already sends 960 px — so a local file
+// is scaled to the same 960 px here and the two are directly comparable in one chart.
+//
+// Two things this must get right, both of which go wrong *silently*:
+//
+//   * ROTATION. Almost every phone photo is stored landscape with an EXIF orientation flag. Drawn
+//     without honouring that flag, a portrait photo is sent sideways and every answer about it is
+//     wrong in a way that still looks like a plausible answer. `createImageBitmap(…,
+//     {imageOrientation: "from-image"})` applies the flag; the <img> fallback gets it for free, since
+//     browsers apply EXIF orientation to <img> by default now.
+//
+//   * PRIVACY. Canvas re-encoding drops the file's EXIF block, so GPS coordinates, timestamps and
+//     camera serials never leave this machine. What is uploaded is a fresh JPEG this page produced.
+//     The server then holds it in memory only (localstore.py) — it is never written to disk.
+const LOCAL = new Map();        // id -> {id, name, w, h, orig_w, orig_h, bytes, url}
+const UPLOAD_FALLBACK_W = 960;  // only if /api/config has not answered yet
+
+function uploadWidth() { return configCache.thumb_width_requested || UPLOAD_FALLBACK_W; }
+function localIds() { return [...LOCAL.keys()]; }
+function localCount() { return LOCAL.size; }
+
+// The titles a link or a curl command can carry. Deliberately a pure function of the job, so the DOM
+// test can check the exclusion without a network or a canvas: an uploaded image exists only inside
+// this session, so putting its filename in a share URL would produce a link that silently shows the
+// recipient fewer photos than the sender saw (and, if the name happens to exist on Commons, a
+// completely different photograph).
+function shareableTitles(job) {
+  return ((job || {}).items || []).filter(it => !it.local).map(it => it.title).filter(Boolean);
+}
+function localDropped(job) {
+  return ((job || {}).items || []).filter(it => it.local).length;
+}
+function localExcludedNote(n) {
+  if (!n) return "";
+  return `\n\n# ${n} image${n === 1 ? " was" : "s were"} uploaded from a computer and cannot travel in a`
+    + ` link: ${n === 1 ? "it exists" : "they exist"} only in the session that uploaded ${n === 1 ? "it" : "them"}.`;
+}
+
+function decodeImage(file) {
+  // `createImageBitmap` can apply the EXIF rotation itself, which is the reliable path.
+  if (window.createImageBitmap) {
+    return createImageBitmap(file, { imageOrientation: "from-image" })
+      .catch(() => decodeViaImg(file));
+  }
+  return decodeViaImg(file);
+}
+
+function decodeViaImg(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => { URL.revokeObjectURL(url); resolve(im); };
+    im.onerror = () => { URL.revokeObjectURL(url); reject(new Error("this browser cannot decode this file")); };
+    im.src = url;
+  });
+}
+
+async function uploadLocal(file) {
+  const src = await decodeImage(file);
+  const sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight;
+  if (!sw || !sh) throw new Error("the browser read no pixels from this file");
+  const scale = Math.min(1, uploadWidth() / sw);      // never upscale: a small image stays small
+  const w = Math.max(1, Math.round(sw * scale)), h = Math.max(1, Math.round(sh * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  canvas.getContext("2d").drawImage(src, 0, 0, w, h);
+  if (src.close) src.close();
+  const blob = await new Promise((resolve, reject) => canvas.toBlob(
+    b => b ? resolve(b) : reject(new Error("the browser could not re-encode the image")),
+    "image/jpeg", 0.87));
+  const q = new URLSearchParams({ name: file.name || "upload.jpg", orig: `${sw}x${sh}` });
+  const r = await fetch(`/api/upload?${q.toString()}`, {
+    method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `upload refused (HTTP ${r.status})`);
+  return { id: d.id, name: file.name || "upload.jpg", url: d.url,
+           w: d.w, h: d.h, orig_w: sw, orig_h: sh, bytes: d.bytes,
+           sent_bytes: blob.size, type: file.type || "" };
+}
+
+function renderTray() {
+  const tray = $("localtray");
+  tray.hidden = LOCAL.size === 0;
+  $("localinfo").textContent = LOCAL.size === 0 ? ""
+    : `${LOCAL.size} local image${LOCAL.size === 1 ? "" : "s"} ready`;
+}
+
+function chipFor(file, kind) {
+  const el = document.createElement("div");
+  el.className = "chip" + (kind === "err" ? " err" : "");
+  el.innerHTML = `<span class="cname"></span><span class="meter"></span>`
+    + (kind === "pending" ? "" : `<button type="button" title="Remove">✕</button>`);
+  el.querySelector(".cname").textContent = file.name || "(no name)";
+  return el;
+}
+
+async function addFiles(files) {
+  const list = [...files];
+  if (!list.length) return;
+  const zone = $("dropzone");
+  zone.classList.add("busy");
+  try {
+    for (const file of list) {
+      const chip = chipFor(file, "pending");
+      chip.querySelector(".meter").textContent = "resizing…";
+      chip.dataset.name = file.name || "";
+      $("localtray").hidden = false;
+      $("localtray").appendChild(chip);
+      try {
+        const entry = await uploadLocal(file);
+        LOCAL.set(entry.id, entry);
+        chip.remove();
+        renderChip(entry);
+      } catch (e) {
+        chip.className = "chip err";
+        chip.querySelector(".meter").textContent = e.message;
+        chip.insertAdjacentHTML("beforeend", `<button type="button" title="Dismiss">✕</button>`);
+        chip.querySelector("button").onclick = () => chip.remove();
+      }
+    }
+  } finally {
+    zone.classList.remove("busy");
+    renderTray();
+    refreshStage();
+  }
+}
+
+function renderChip(entry) {
+  const el = chipFor({ name: entry.name }, "ok");
+  const meter = el.querySelector(".meter");
+  const grew = entry.orig_w && entry.orig_w > entry.w;
+  meter.textContent = `${entry.w}×${entry.h}` + (grew ? ` from ${entry.orig_w}×${entry.orig_h}` : "")
+    + ` · ${Math.max(1, Math.round(entry.sent_bytes / 1024))} KB`;
+  el.insertAdjacentHTML("afterbegin", `<img alt="" src="${esc(entry.url)}">`);
+  el.querySelector("button").onclick = () => { LOCAL.delete(entry.id); el.remove(); renderTray(); refreshStage(); };
+  $("localtray").appendChild(el);
+}
+
+function clearTray() {
+  LOCAL.clear();
+  $("localtray").innerHTML = "";
+  renderTray();
+  refreshStage();
+}
+
+// Arm "Score them" when there is anything to score. The tray is a complete input on its own — a user
+// who only drops files should not have to press "Validate files" (which is about the *pasted* list)
+// before the primary button will work.
+function refreshStage() {
+  if (runInProgress()) return;                 // a run owns the stage until it finishes
+  setStage((localCount() + validatedCount) ? "checked" : "idle");
+}
+
+$("pick").onclick = () => $("filepick").click();
+$("filepick").onchange = (e) => {
+  addFiles(e.target.files);
+  e.target.value = "";            // so picking the same file twice fires `change` twice
+};
+// Drag-and-drop: the default action for a dropped file is to navigate away from the app, so dragover
+// and drop both have to be prevented — but only for file drags, or dropping selected text into the
+// textarea would stop working.
+function isFileDrag(e) {
+  return [...((e.dataTransfer && e.dataTransfer.types) || [])].includes("Files");
+}
+document.addEventListener("dragover", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  $("dropzone").classList.add("over");
+});
+["dragleave", "dragend"].forEach(ev => document.addEventListener(ev, (e) => {
+  if (isFileDrag(e)) $("dropzone").classList.remove("over");
+}));
+document.addEventListener("drop", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  $("dropzone").classList.remove("over");
+  addFiles(e.dataTransfer.files);
+});
+// …and the clipboard, because a screenshot of a person is often the thing you want to try
+document.addEventListener("paste", (e) => {
+  const files = (e.clipboardData && e.clipboardData.files) || [];
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+
 async function validateList() {
   if (!(await askNewRun())) return;
   clearAll();
@@ -1371,7 +1590,8 @@ async function validateList() {
     // server's number, read from /api/config — never hardcoded here (tests/check_js.py asserts that).
     // If the key is missing the page still works: it just falls back to the server's own refusal.
     const cap = configCache.max_input_items;
-    const over = cap ? total > cap : false;
+    const nLocal = localCount();
+    const over = cap ? (total + nLocal) > cap : false;
     // Offer the remedy right here, where the limit is stated. If /api/config has not landed yet there is
     // nothing to state and nothing is offered — the server's 413 is still the boundary.
     lastParsed = d;                          // what the prune buttons rewrite the box from
@@ -1381,16 +1601,18 @@ async function validateList() {
       + ` (expand for the table)`;
     $("parsed").open = false;               // stay collapsed; the pill beside the buttons already counts
     $("parseinfo").textContent = `${ok} of ${total} resolved`
-      + (ok ? ` · up to ${ok} model call${ok === 1 ? "" : "s"}` : "")
+      + (nLocal ? ` · +${nLocal} local image${nLocal === 1 ? "" : "s"}` : "")
+      + (ok + nLocal ? ` · up to ${ok + nLocal} model call${ok + nLocal === 1 ? "" : "s"}` : "")
       + (over ? ` — over the ${cap}-per-run limit` : "");
     // say what the next click costs, before it is clicked
     $("run").title = over
-      ? `This list is ${total} photos and a run takes at most ${cap} — split it and score the parts`
-      : ok
-        ? `Send ${ok} photo${ok === 1 ? "" : "s"} to the model — one call each unless already cached`
+      ? `This run is ${total + nLocal} images and a run takes at most ${cap} — split it and score the parts`
+      : (ok + nLocal)
+        ? `Send ${ok + nLocal} image${ok + nLocal === 1 ? "" : "s"} to the model — one call each unless already cached`
         : "";
     $("warnings").innerHTML = (d.warnings || []).map(w => `skipped “${esc(w.raw)}” — ${esc(w.reason)}`).join("<br>");
-    setStage(ok === 0 ? "idle" : "checked");     // hand the blue highlight over to "Score them"
+    // an empty box with images in the tray is a complete run, so Score them must be armed for it
+    setStage((ok === 0 && nLocal === 0) ? "idle" : "checked");
   } finally { $("check").disabled = false; }
 }
 $("check").onclick = () => validateList();
@@ -1457,8 +1679,9 @@ async function startRun() {
   // `validatedCount` is 0 on the ?run=1 path (a link never validates), which is why a cache-only replay
   // is unaffected; a share link cannot exceed the cap anyway (URL_LIST_HARD_MAX is ~130 filenames).
   const cap = configCache.max_input_items;
-  if (cap && validatedCount > cap) {
-    $("jobstate").textContent = `that list is ${validatedCount} photos and a run takes at most `
+  const want = validatedCount + localCount();      // uploads are images in the run too
+  if (cap && want > cap) {
+    $("jobstate").textContent = `that run is ${want} images and a run takes at most `
       + `${cap} — split it and score the parts`;
     setStage("checked");
     return;
@@ -1470,8 +1693,8 @@ async function startRun() {
   const replay = urlReplay;
   urlReplay = false;
   const r = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: $("input").value, no_cache: $("nocache").checked,
-                           cached_only: replay }) });
+    body: JSON.stringify({ text: $("input").value, local: localIds(),
+                           no_cache: $("nocache").checked, cached_only: replay }) });
   const d = await r.json();
   if (!r.ok) { $("jobstate").textContent = d.error || "could not start"; setStage("checked"); return; }
   jobId = d.job_id;
@@ -1488,9 +1711,17 @@ $("run").onclick = () => startRun();
 // a URL that runs on GET — a GET with a spending side effect fires from link previews, chat unfurls,
 // crawlers, prefetch and an accidental refresh, which is why the share link is cache-only.
 $("apilink").onclick = async () => {
-  const titles = ((lastJob || {}).items || []).map(i => i.title).filter(Boolean);
-  if (!titles.length) return;
+  const titles = shareableTitles(lastJob);
+  const dropped = localDropped(lastJob);
   const box = $("shareurl");
+  if (!titles.length) {
+    if (!dropped) return;
+    box.value = "every image in this run was uploaded from a computer, so there is no list to send — "
+      + "an upload exists only in the session that uploaded it. The reports are the way to share these "
+      + "results.";
+    box.select();
+    return;
+  }
   const max = configCache.eval_max || 25;            // /api/eval takes a bounded number per call
   const chunks = [];
   for (let i = 0; i < titles.length; i += max) chunks.push(titles.slice(i, i + max));
@@ -1504,7 +1735,8 @@ $("apilink").onclick = async () => {
     + (chunks.length > 1
         ? `\n\n# /api/eval takes at most ${max} files per call (EVAL_MAX), which is why there are `
           + `${chunks.length}. Raise EVAL_MAX on the server to do it in one.`
-        : "");
+        : "")
+    + localExcludedNote(dropped);
   box.select();
   try { await navigator.clipboard.writeText(box.value); $("apilink").textContent = "Copied ✓"; }
   catch (e) { $("apilink").textContent = "Press ⌘C / Ctrl-C"; }
@@ -1512,20 +1744,29 @@ $("apilink").onclick = async () => {
 };
 
 $("share").onclick = async () => {
-  const titles = ((lastJob || {}).items || []).map(i => i.title).filter(Boolean);
-  if (!titles.length) return;
+  const titles = shareableTitles(lastJob);
+  const dropped = localDropped(lastJob);
+  const box = $("shareurl");
+  if (!titles.length) {
+    box.value = dropped
+      ? "every image in this run was uploaded from a computer — a link cannot reproduce them, because "
+        + "they are not published anywhere and exist only in this session. Send the JSON or PDF report "
+        + "instead."
+      : "there is nothing to share yet — validate and score a list first";
+    box.select();
+    return;
+  }
   const q = new URLSearchParams({ list: titles.join("\n"), run: "1" });
   if (chartMode === "pose") q.set("view", "pose");
   if (axisMode === "candidates") q.set("axis", "candidates");
   if (scaleMode === "top") q.set("scale", "top");
   const url = `${location.origin}${location.pathname}?${q.toString()}`;
-  const box = $("shareurl");
   if (url.length > URL_LIST_HARD_MAX) {
     box.value = `this list is too long for a share link (${url.length} of ${URL_LIST_HARD_MAX} characters) — send the list, or the JSON report`;
     box.select();
     return;
   }
-  box.value = url;
+  box.value = url + localExcludedNote(dropped);
   box.select();
   try { await navigator.clipboard.writeText(url); $("share").textContent = "Copied ✓"; }
   catch (e) { $("share").textContent = "Press ⌘C / Ctrl-C"; }
